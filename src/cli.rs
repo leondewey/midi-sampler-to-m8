@@ -144,6 +144,14 @@ pub struct RenderArgs {
     /// avoid a click at the slot boundary. 0 disables.
     #[arg(long, default_value_t = 10)]
     pub fade_ms: u64,
+
+    /// Also write the `_map.csv` sidecar describing every slot.
+    #[arg(long)]
+    pub csv: bool,
+
+    /// Also write the `_render.json` sidecar with the render config.
+    #[arg(long)]
+    pub json: bool,
 }
 
 impl RenderArgs {
@@ -258,6 +266,8 @@ mod tests {
             decay_threshold: 0.000125,
             slot_margin: 0.7,
             fade_ms: 10,
+            csv: false,
+            json: false,
         }
     }
 

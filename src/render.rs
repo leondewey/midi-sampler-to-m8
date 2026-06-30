@@ -233,30 +233,60 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         statuses.push("skipped".to_string());
     }
 
-    wav::write_wav(&args.output, &full, M8_SAMPLE_RATE, out_channels)?;
-    let (csv_path, json_path) = output::sidecar_paths(&args.output);
-    output::write_csv_map(&csv_path, &slot_map, args.velocity, &statuses)?;
+    // Padded chain: every slot, identical length (slot index = MIDI note).
+    let padded_path =
+        output::numbered_wav_path(&args.output, slot_map.len(), args.note_length, false);
+    wav::write_wav(&padded_path, &full, M8_SAMPLE_RATE, out_channels)?;
 
-    let config = build_config(
-        args,
-        &midi_name,
-        &audio_name,
-        out_channels,
-        effective_slot_length,
-        slot_map.len() as u32,
-        &args.output,
-        &csv_path,
-    );
-    output::write_json_config(&json_path, &config)?;
+    // Unpadded copy: drop the leading/trailing runs of silent slots, keeping any
+    // interior silent slots. `rendered` marks slots that actually produced sound.
+    let unpadded_path = match rendered_bounds(&statuses) {
+        Some((f, l)) => {
+            let trimmed_count = l - f + 1;
+            let path =
+                output::numbered_wav_path(&args.output, trimmed_count, args.note_length, true);
+            let slice = &full[f * slot_samples..(l + 1) * slot_samples];
+            wav::write_wav(&path, slice, M8_SAMPLE_RATE, out_channels)?;
+            Some(path)
+        }
+        // No sounding slots -> nothing to trim to, so skip the unpadded copy.
+        _ => None,
+    };
+
+    // Sidecars are opt-in; their names match the padded WAV.
+    let (csv_path, json_path) = output::sidecar_paths(&padded_path);
+    let csv_written = if args.csv {
+        output::write_csv_map(&csv_path, &slot_map, args.velocity, &statuses)?;
+        Some(csv_path.clone())
+    } else {
+        None
+    };
+    let json_written = if args.json {
+        let config = build_config(
+            args,
+            &midi_name,
+            &audio_name,
+            out_channels,
+            effective_slot_length,
+            slot_map.len() as u32,
+            &padded_path,
+            &csv_path,
+        );
+        output::write_json_config(&json_path, &config)?;
+        Some(json_path)
+    } else {
+        None
+    };
 
     print_summary(
         effective_slot_length,
         out_channels,
         completed,
         &slot_map,
-        &args.output,
-        &csv_path,
-        &json_path,
+        &padded_path,
+        unpadded_path.as_deref(),
+        csv_written.as_deref(),
+        json_written.as_deref(),
     );
     Ok(())
 }
@@ -327,6 +357,15 @@ fn all_notes_off(conn: &mut MidiOutputConnection, ch: u8) {
         let _ = conn.send(&[0x80 | ch, n, 0]);
     }
     let _ = conn.send(&[0xB0 | ch, 123, 0]);
+}
+
+/// First and last slot index whose status is `rendered`, i.e. the inclusive
+/// range to keep when trimming the leading/trailing silent slots. Interior
+/// non-`rendered` slots stay inside the range. `None` if nothing was rendered.
+fn rendered_bounds(statuses: &[String]) -> Option<(usize, usize)> {
+    let first = statuses.iter().position(|s| s == "rendered")?;
+    let last = statuses.iter().rposition(|s| s == "rendered")?;
+    Some((first, last))
 }
 
 /// Peak absolute sample value of a buffer.
@@ -605,7 +644,8 @@ fn eta_label(elapsed: Duration, done: usize, total: usize) -> String {
 
 fn print_plan(args: &RenderArgs, slot_map: &[Slot], out_channels: u16) {
     let total = slot_map.len() as f64 * args.slot_length;
-    let (csv, json) = output::sidecar_paths(&args.output);
+    let padded = output::numbered_wav_path(&args.output, slot_map.len(), args.note_length, false);
+    let (csv, json) = output::sidecar_paths(&padded);
     let layout = if out_channels == 1 { "mono" } else { "stereo" };
     let midi_output = if args.virtual_midi {
         "virtual port 'midi-sampler-to-m8'".to_string()
@@ -643,11 +683,16 @@ fn print_plan(args: &RenderArgs, slot_map: &[Slot], out_channels: u16) {
     }
     println!(
         "  Output WAV  : {} ({layout}, {} Hz, 16-bit)",
-        args.output.display(),
+        padded.display(),
         M8_SAMPLE_RATE
     );
-    println!("  CSV map     : {}", csv.display());
-    println!("  JSON config : {}", json.display());
+    println!("  Unpadded WAV: an extra copy with leading/trailing silent slots removed (count set at runtime)");
+    if args.csv {
+        println!("  CSV map     : {}", csv.display());
+    }
+    if args.json {
+        println!("  JSON config : {}", json.display());
+    }
     if args.auto_slot_length {
         println!("  Total time  : determined at runtime (slot length is measured)");
     } else {
@@ -671,18 +716,26 @@ fn print_summary(
     completed: usize,
     slot_map: &[Slot],
     wav_path: &std::path::Path,
-    csv_path: &std::path::Path,
-    json_path: &std::path::Path,
+    unpadded_path: Option<&std::path::Path>,
+    csv_path: Option<&std::path::Path>,
+    json_path: Option<&std::path::Path>,
 ) {
     let layout = if out_channels == 1 { "mono" } else { "stereo" };
     println!("\nDone. Rendered {completed}/{} slots.", slot_map.len());
     println!(
-        "  WAV  : {} ({layout}, {} Hz, 16-bit)",
+        "  WAV      : {} ({layout}, {} Hz, 16-bit)",
         wav_path.display(),
         M8_SAMPLE_RATE
     );
-    println!("  CSV  : {}", csv_path.display());
-    println!("  JSON : {}", json_path.display());
+    if let Some(p) = unpadded_path {
+        println!("  Unpadded : {}", p.display());
+    }
+    if let Some(p) = csv_path {
+        println!("  CSV      : {}", p.display());
+    }
+    if let Some(p) = json_path {
+        println!("  JSON     : {}", p.display());
+    }
     println!(
         "  Slot length: {:.3}s  ->  {} samples/slot",
         slot_length,
@@ -715,6 +768,23 @@ mod tests {
         // Nothing done yet, or all done -> placeholder.
         assert_eq!(eta_label(Duration::from_secs(0), 0, 5), "~-- left");
         assert_eq!(eta_label(Duration::from_secs(50), 5, 5), "~-- left");
+    }
+
+    #[test]
+    fn rendered_bounds_trims_ends_and_keeps_interior() {
+        let s = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // Leading/trailing silence dropped; interior silent slot (index 3) kept.
+        assert_eq!(
+            rendered_bounds(&s(&["silent", "silent", "rendered", "silent", "rendered", "silent"])),
+            Some((2, 4))
+        );
+        // A trailing interrupted run ("skipped") is excluded.
+        assert_eq!(
+            rendered_bounds(&s(&["rendered", "skipped", "skipped"])),
+            Some((0, 0))
+        );
+        // No rendered slots -> no range.
+        assert_eq!(rendered_bounds(&s(&["silent", "silent"])), None);
     }
 
     #[test]

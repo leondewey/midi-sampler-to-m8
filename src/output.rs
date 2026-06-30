@@ -3,7 +3,7 @@
 use crate::config::RenderConfig;
 use crate::notes::Slot;
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Write the `_map.csv` describing every slot's position and status.
 ///
@@ -64,6 +64,23 @@ pub fn sidecar_paths(wav: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     )
 }
 
+/// Build an output WAV path embedding the slot count and note length, e.g.
+/// `<stem>_128slots_8s.wav` (padded) or `<stem>_21slots_8s_unpadded.wav`.
+/// A whole note length renders without a decimal (`8.0` -> `8s`, `8.5` -> `8.5s`).
+pub fn numbered_wav_path(out: &Path, slots: usize, note_length: f64, unpadded: bool) -> PathBuf {
+    let stem = out
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "output".to_string());
+    let dir = out.parent().unwrap_or_else(|| Path::new("."));
+    let ext = out
+        .extension()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "wav".to_string());
+    let suffix = if unpadded { "_unpadded" } else { "" };
+    dir.join(format!("{stem}_{slots}slots_{note_length}s{suffix}.{ext}"))
+}
+
 /// Derive the per-note test WAV path: `<stem>_testNN.wav`.
 pub fn test_note_path(wav: &Path, midi: u8) -> std::path::PathBuf {
     let stem = wav
@@ -72,4 +89,28 @@ pub fn test_note_path(wav: &Path, midi: u8) -> std::path::PathBuf {
         .unwrap_or_else(|| "output".to_string());
     let dir = wav.parent().unwrap_or_else(|| Path::new("."));
     dir.join(format!("{stem}_test{midi:02}.wav"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbered_wav_path_embeds_count_and_length() {
+        // Padded: full count, whole note length renders without a decimal.
+        assert_eq!(
+            numbered_wav_path(Path::new("dir/out.wav"), 128, 8.0, false),
+            PathBuf::from("dir/out_128slots_8s.wav")
+        );
+        // Unpadded: trimmed count plus the `_unpadded` marker.
+        assert_eq!(
+            numbered_wav_path(Path::new("dir/out.wav"), 21, 8.0, true),
+            PathBuf::from("dir/out_21slots_8s_unpadded.wav")
+        );
+        // Fractional note length keeps its decimal.
+        assert_eq!(
+            numbered_wav_path(Path::new("out.wav"), 5, 8.5, false),
+            PathBuf::from("out_5slots_8.5s.wav")
+        );
+    }
 }

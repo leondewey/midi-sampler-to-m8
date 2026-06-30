@@ -38,14 +38,17 @@ See `--help` for all options, including `--probe` (skip silent notes) and `--aut
 
 ## Output files
 
-For each render, you get:
-- **`samples.wav`** — the full 16-bit PCM chain (resampled to 44.1 kHz)
-- **`samples_map.csv`** — per-slot metadata (MIDI note, start/end times, sounding status)
-- **`samples_render.json`** — full render configuration (for reproduction)
+The slot count and note length are embedded in the filename. For each render, you get two WAVs:
+- **`sample_128slots_8s.wav`** — the full 16-bit PCM chain (resampled to 44.1 kHz), every slot present so the slot index maps 1:1 to the MIDI note.
+- **`sample_21slots_8s_unpadded.wav`** — a compact copy with the leading and trailing runs of silent slots removed (interior silent slots are kept). The slot count in its name reflects the trimmed length.
+
+The CSV/JSON sidecars are **opt-in** (off by default):
+- **`--csv`** writes `<name>_map.csv` — per-slot metadata (MIDI note, start/end times, sounding status)
+- **`--json`** writes `<name>_render.json` — full render configuration (for reproduction)
 
 ## Loading into the M8
 
-1. Load `samples.wav` into the M8 Sampler instrument.
+1. Load the padded WAV (e.g. `sample_128slots_8s.wav`) into the M8 Sampler instrument.
 2. Set the sampler to:
    - **SLICE:** 80 (fixed-slice mode)
    - **PLAY:** FWD
@@ -60,4 +63,4 @@ cargo build
 cargo test
 ```
 
-All tests pass (37 unit tests + 6 integration tests).
+All tests pass (39 unit tests + 6 integration tests).
