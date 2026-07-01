@@ -48,6 +48,9 @@ pub struct RenderParams {
     pub pre_roll_ms: u64,
     pub slice_count: u32,
     pub m8_slice_hex: String,
+    /// Chord tag for chord renders (`maj`, `packed`, ...); omitted for single notes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chord: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

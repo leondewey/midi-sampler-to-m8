@@ -1,5 +1,6 @@
 //! Command-line interface definitions and argument validation.
 
+use crate::chords::ChordQuality;
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -26,15 +27,26 @@ pub enum Command {
 /// Output channel layout.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Channels {
+    /// Follow the source: mono input -> mono, stereo input -> stereo.
+    Auto,
     Mono,
     Stereo,
 }
 
 impl Channels {
-    pub fn count(self) -> u16 {
+    /// Resolve the output channel count, using the source's native channel count
+    /// for `Auto`.
+    pub fn resolve(self, native_channels: u16) -> u16 {
         match self {
             Channels::Mono => 1,
             Channels::Stereo => 2,
+            Channels::Auto => {
+                if native_channels >= 2 {
+                    2
+                } else {
+                    1
+                }
+            }
         }
     }
 }
@@ -84,8 +96,9 @@ pub struct RenderArgs {
     #[arg(long, default_value_t = 44_100)]
     pub sample_rate: u32,
 
-    /// Output channel layout.
-    #[arg(long, value_enum, default_value_t = Channels::Mono)]
+    /// Output channel layout. `auto` follows the source (mono in -> mono out,
+    /// stereo in -> stereo out); `mono`/`stereo` force a layout.
+    #[arg(long, value_enum, default_value_t = Channels::Auto)]
     pub channels: Channels,
 
     /// First MIDI note to render (0..=127).
@@ -152,6 +165,22 @@ pub struct RenderArgs {
     /// Also write the `_render.json` sidecar with the render config.
     #[arg(long)]
     pub json: bool,
+
+    /// Record a chord of this quality rooted at each note instead of a single
+    /// note. Slice index stays equal to the root note. Mutually exclusive with
+    /// --chords.
+    #[arg(long, value_enum)]
+    pub chord: Option<ChordQuality>,
+
+    /// Pack several chord qualities (comma-separated) into the slice budget,
+    /// laid quality-major across the playable range. Mutually exclusive with
+    /// --chord.
+    #[arg(long, value_enum, value_delimiter = ',')]
+    pub chords: Vec<ChordQuality>,
+
+    /// Slice budget for packed chord mode (the M8 fixed-slice count).
+    #[arg(long, default_value_t = 128)]
+    pub max_slices: usize,
 }
 
 impl RenderArgs {
@@ -232,6 +261,27 @@ impl RenderArgs {
                 bail!("slot-margin must be >= 0 (got {})", self.slot_margin);
             }
         }
+        if self.chord.is_some() && !self.chords.is_empty() {
+            bail!("use either --chord (one quality, slice = root) or --chords (packed), not both");
+        }
+        if !self.chords.is_empty() {
+            if self.max_slices < 1 {
+                bail!("max-slices must be at least 1");
+            }
+            if self.max_slices > 255 {
+                bail!(
+                    "max-slices must be <= 255 (the M8 fixed-slice maximum); got {}",
+                    self.max_slices
+                );
+            }
+            if self.max_slices < self.chords.len() {
+                bail!(
+                    "max-slices ({}) must be at least the number of chord qualities ({})",
+                    self.max_slices,
+                    self.chords.len()
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -268,6 +318,9 @@ mod tests {
             fade_ms: 10,
             csv: false,
             json: false,
+            chord: None,
+            chords: Vec::new(),
+            max_slices: 128,
         }
     }
 
@@ -357,8 +410,41 @@ mod tests {
     }
 
     #[test]
-    fn channels_count_mapping() {
-        assert_eq!(Channels::Mono.count(), 1);
-        assert_eq!(Channels::Stereo.count(), 2);
+    fn channels_resolve_mapping() {
+        // Forced layouts ignore the source channel count.
+        assert_eq!(Channels::Mono.resolve(2), 1);
+        assert_eq!(Channels::Stereo.resolve(1), 2);
+        // Auto follows the source.
+        assert_eq!(Channels::Auto.resolve(1), 1);
+        assert_eq!(Channels::Auto.resolve(2), 2);
+        assert_eq!(Channels::Auto.resolve(4), 2);
+    }
+
+    #[test]
+    fn chord_and_chords_are_mutually_exclusive() {
+        let mut a = base();
+        a.chord = Some(ChordQuality::Maj);
+        a.chords = vec![ChordQuality::Min];
+        assert!(a.validate().is_err());
+    }
+
+    #[test]
+    fn packed_needs_enough_slices_for_qualities() {
+        let mut a = base();
+        a.chords = vec![ChordQuality::Maj, ChordQuality::Min, ChordQuality::Dim];
+        a.max_slices = 2;
+        assert!(a.validate().is_err());
+        a.max_slices = 3;
+        assert!(a.validate().is_ok());
+    }
+
+    #[test]
+    fn packed_max_slices_is_capped_at_255() {
+        let mut a = base();
+        a.chords = vec![ChordQuality::Maj];
+        a.max_slices = 256;
+        assert!(a.validate().is_err());
+        a.max_slices = 255;
+        assert!(a.validate().is_ok());
     }
 }

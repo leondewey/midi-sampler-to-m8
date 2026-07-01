@@ -3,6 +3,7 @@
 //! Dirtywave M8 fixed-slice sample-chain WAV.
 
 mod audio;
+mod chords;
 mod cli;
 mod config;
 mod devices;

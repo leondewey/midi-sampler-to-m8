@@ -34,8 +34,9 @@ fn render_dry_run_prints_plan_without_devices() {
         .success()
         .stdout(predicate::str::contains("DRY RUN"))
         .stdout(predicate::str::contains("128 slots"))
-        // Filename now embeds the slot count and note length.
-        .stdout(predicate::str::contains("plan_128slots_1s.wav"));
+        // Filename embeds the layout, slot count, and note length ("auto" until a
+        // device resolves it at runtime).
+        .stdout(predicate::str::contains("plan_auto_128slots_1s.wav"));
 }
 
 #[test]

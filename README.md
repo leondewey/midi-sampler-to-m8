@@ -36,11 +36,28 @@ See `--help` for all options, including `--probe` (skip silent notes) and `--aut
 
 **Note:** `--virtual-midi` is available on **macOS and Linux only**. On Windows, you must specify an existing MIDI output port.
 
+## Chords
+
+Two flags turn the single-note autosampler into a chord sampler (built-in qualities: `maj`, `min`, `dim`, `aug`, `maj7`, `min7`, `dom7`, `sus2`, `sus4`, `5`):
+
+- **`--chord <quality>`** — one quality per file, **slice index = root note** (same keymap as single notes). Pressing C4 on the M8 plays the recorded C4-major chord. The quality is in the filename, so no lookup is needed.
+  ```bash
+  ... --chord maj      # -> sample_maj_stereo_128slots_8s.wav
+  ```
+- **`--chords <q1,q2,...>`** — *packed* mode: fills the slice budget (`--max-slices`, default 128) with **roots × qualities**, laid quality-major (all roots of the first quality, then the next). Each quality gets `max_slices / num_qualities` roots, spread evenly across the instrument's playable range. The pressed note no longer equals the root, so the **CSV legend is written by default** to map each slice to its chord.
+  ```bash
+  ... --chords maj,min,dim   # 42 roots x 3 qualities = 126 slices, + _map.csv legend
+  ```
+
+Both reuse the full pipeline (probe, `--auto-slot-length`, padded + unpadded copies). Set the M8 **SLICE** to the slice count shown in the summary (e.g. `78` for 120 slices, `80` for 128).
+
 ## Output files
 
-The slot count and note length are embedded in the filename. For each render, you get two WAVs:
-- **`sample_128slots_8s.wav`** — the full 16-bit PCM chain (resampled to 44.1 kHz), every slot present so the slot index maps 1:1 to the MIDI note.
-- **`sample_21slots_8s_unpadded.wav`** — a compact copy with the leading and trailing runs of silent slots removed (interior silent slots are kept). The slot count in its name reflects the trimmed length.
+The channel layout, slot count, and note length are embedded in the filename. For each render, you get two WAVs:
+- **`sample_stereo_128slots_8s.wav`** — the full 16-bit PCM chain (resampled to 44.1 kHz), every slot present so the slot index maps 1:1 to the MIDI note.
+- **`sample_stereo_21slots_8s_unpadded.wav`** — a compact copy with the leading and trailing runs of silent slots removed (interior silent slots are kept). The slot count in its name reflects the trimmed length.
+
+Channels follow the source by default (`--channels auto`): a stereo input yields a stereo WAV, a mono input a mono WAV. Use `--channels mono` or `--channels stereo` to force a layout.
 
 The CSV/JSON sidecars are **opt-in** (off by default):
 - **`--csv`** writes `<name>_map.csv` — per-slot metadata (MIDI note, start/end times, sounding status)
@@ -48,9 +65,9 @@ The CSV/JSON sidecars are **opt-in** (off by default):
 
 ## Loading into the M8
 
-1. Load the padded WAV (e.g. `sample_128slots_8s.wav`) into the M8 Sampler instrument.
+1. Load the padded WAV (e.g. `sample_stereo_128slots_8s.wav`) into the M8 Sampler instrument.
 2. Set the sampler to:
-   - **SLICE:** 80 (fixed-slice mode)
+   - **SLICE:** the slice count shown in the run summary (`80` for the default 128 slots; packed chord files print their own count)
    - **PLAY:** FWD
    - **START:** 00
    - **LEN:** FF (full length)
@@ -63,4 +80,4 @@ cargo build
 cargo test
 ```
 
-All tests pass (39 unit tests + 6 integration tests).
+All tests pass (48 unit tests + 6 integration tests).

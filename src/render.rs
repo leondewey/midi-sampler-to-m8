@@ -19,11 +19,13 @@ use std::time::{Duration, Instant};
 pub fn run(args: &RenderArgs) -> Result<()> {
     args.validate()?;
 
-    let out_channels = args.channels.count();
-    let slot_map = build_slot_map(args.start_midi, args.end_midi, args.slot_length);
+    let packed = !args.chords.is_empty();
+    // Probe map: single notes for note mode, the chord per note for --chord, and
+    // single roots for packed mode (probed to find the playable range).
+    let slot_map = build_slot_map(args.start_midi, args.end_midi, args.slot_length, args.chord);
 
     if args.dry_run {
-        print_plan(args, &slot_map, out_channels);
+        print_plan(args, &slot_map);
         return Ok(());
     }
 
@@ -36,6 +38,9 @@ pub fn run(args: &RenderArgs) -> Result<()> {
     let (device, audio_name) = devices::open_audio_input(&args.audio_input)?;
     let capture = Capture::open(device)?;
 
+    // Now that the source is open, resolve the output layout (Auto follows it).
+    let out_channels = args.channels.resolve(capture.native_channels);
+
     if args.virtual_midi {
         println!("MIDI output : virtual port '{midi_name}'");
     } else {
@@ -45,6 +50,12 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         "Audio input : {audio_name} ({} Hz, {} ch native)",
         capture.native_rate, capture.native_channels
     );
+    let layout = if out_channels == 1 { "mono" } else { "stereo" };
+    if args.channels == crate::cli::Channels::Auto {
+        println!("Output      : {layout} (auto, matched source)");
+    } else {
+        println!("Output      : {layout}");
+    }
     if capture.native_rate != M8_SAMPLE_RATE {
         println!(
             "  note: capturing at {} Hz and resampling to {} Hz",
@@ -74,15 +85,25 @@ pub fn run(args: &RenderArgs) -> Result<()> {
     let note_on = 0x90 | ch;
     let note_off = 0x80 | ch;
 
-    // Single-note test mode.
+    // Single-note (or single-chord) test mode.
     if let Some(note) = args.test_note {
-        println!("Test note {note} ({})", midi_to_m8_note(note));
+        // Play the chord rooted at the test note when --chord is set, else the
+        // bare note. (--chords is a packing mode and doesn't apply to one note.)
+        let notes = match args.chord {
+            Some(q) => crate::chords::chord_notes(note, q),
+            None => vec![note],
+        };
+        match args.chord {
+            Some(q) => println!("Test {}", crate::chords::chord_label(note, q)),
+            None => println!("Test note {note} ({})", midi_to_m8_note(note)),
+        }
         let samples = render_one(
             &mut conn,
             &capture,
-            note,
+            &notes,
             args,
             args.slot_length,
+            out_channels,
             note_on,
             note_off,
             &shutdown,
@@ -120,15 +141,15 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         } else {
             sounding_indices
         };
-        let sample_midis: Vec<u8> = pick_spread(&pool, args.measure_notes as usize)
+        let sample_notes: Vec<Vec<u8>> = pick_spread(&pool, args.measure_notes as usize)
             .iter()
-            .map(|&i| slot_map[i].midi)
+            .map(|&i| slot_map[i].notes.clone())
             .collect();
         let len = measure_slot_length(
             &mut conn,
             &capture,
             args,
-            &sample_midis,
+            &sample_notes,
             note_on,
             note_off,
             &shutdown,
@@ -142,11 +163,42 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         args.slot_length
     };
 
-    // Rebuild the slot map at the effective slot length.
-    let slot_map = build_slot_map(args.start_midi, args.end_midi, effective_slot_length);
+    // Build the recording map at the effective slot length.
+    let slot_map = if packed {
+        // Without a probe we can't tell which roots the instrument actually
+        // plays, so packing falls back to the full range and may record blanks.
+        if probed.is_none() {
+            println!(
+                "warning: --no-probe with --chords packs the full {}..{} range, so unplayable \
+                 notes may be recorded as blank chords. Drop --no-probe to pack only sounding roots.",
+                args.start_midi, args.end_midi
+            );
+        }
+        let roots = packed_roots(args, &slot_map, &probed);
+        let map = crate::notes::chord_slots(&roots, &args.chords, effective_slot_length);
+        if let (Some(first), Some(last)) = (roots.first(), roots.last()) {
+            println!(
+                "Packed: {} qualities × {} roots = {} slices (roots MIDI {}..{}).",
+                args.chords.len(),
+                roots.len(),
+                map.len(),
+                first,
+                last
+            );
+        }
+        map
+    } else {
+        build_slot_map(
+            args.start_midi,
+            args.end_midi,
+            effective_slot_length,
+            args.chord,
+        )
+    };
 
-    // Which notes to actually record (skip silent ones unless --no-probe).
-    let sounding_for_loop: Vec<bool> = if args.no_probe {
+    // Which slots to actually record. Packed roots are already filtered to the
+    // sounding range, so record them all; otherwise skip probed-silent slots.
+    let sounding_for_loop: Vec<bool> = if packed || args.no_probe {
         vec![true; slot_map.len()]
     } else {
         probed.clone().unwrap_or_else(|| vec![true; slot_map.len()])
@@ -174,12 +226,12 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         }
 
         print!(
-            "\r{}  Slot {:>3}/{}  MIDI {:>3}  {:<4}  {}   ",
+            "\r{}  Slot {:>3}/{}  MIDI {:>3}  {:<8}  {}   ",
             progress_bar(i + 1, slot_map.len(), 10),
             slot.slot as usize + 1,
             slot_map.len(),
             slot.midi,
-            slot.m8_note,
+            slot.label,
             eta_label(start.elapsed(), i + 1, slot_map.len()),
         );
         let _ = std::io::stdout().flush();
@@ -195,9 +247,10 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         let samples = render_one(
             &mut conn,
             &capture,
-            slot.midi,
+            &slot.notes,
             args,
             effective_slot_length,
+            out_channels,
             note_on,
             note_off,
             &shutdown,
@@ -233,9 +286,19 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         statuses.push("skipped".to_string());
     }
 
+    // Filename tag: the chord quality for --chord, "packed" for --chords, none
+    // for plain notes.
+    let tag = chord_tag(args);
+
     // Padded chain: every slot, identical length (slot index = MIDI note).
-    let padded_path =
-        output::numbered_wav_path(&args.output, slot_map.len(), args.note_length, false);
+    let padded_path = output::numbered_wav_path(
+        &args.output,
+        tag.as_deref(),
+        layout,
+        slot_map.len(),
+        args.note_length,
+        false,
+    );
     wav::write_wav(&padded_path, &full, M8_SAMPLE_RATE, out_channels)?;
 
     // Unpadded copy: drop the leading/trailing runs of silent slots, keeping any
@@ -243,8 +306,14 @@ pub fn run(args: &RenderArgs) -> Result<()> {
     let unpadded_path = match rendered_bounds(&statuses) {
         Some((f, l)) => {
             let trimmed_count = l - f + 1;
-            let path =
-                output::numbered_wav_path(&args.output, trimmed_count, args.note_length, true);
+            let path = output::numbered_wav_path(
+                &args.output,
+                tag.as_deref(),
+                layout,
+                trimmed_count,
+                args.note_length,
+                true,
+            );
             let slice = &full[f * slot_samples..(l + 1) * slot_samples];
             wav::write_wav(&path, slice, M8_SAMPLE_RATE, out_channels)?;
             Some(path)
@@ -253,9 +322,10 @@ pub fn run(args: &RenderArgs) -> Result<()> {
         _ => None,
     };
 
-    // Sidecars are opt-in; their names match the padded WAV.
+    // Sidecars: opt-in via --csv, but in packed mode the CSV is the chord legend
+    // that maps each slice to its chord, so it is written by default there.
     let (csv_path, json_path) = output::sidecar_paths(&padded_path);
-    let csv_written = if args.csv {
+    let csv_written = if args.csv || packed {
         output::write_csv_map(&csv_path, &slot_map, args.velocity, &statuses)?;
         Some(csv_path.clone())
     } else {
@@ -291,22 +361,32 @@ pub fn run(args: &RenderArgs) -> Result<()> {
     Ok(())
 }
 
-/// Render and post-process a single note into a fixed-length slot.
+/// Render and post-process one slot — a single note or a chord — into a
+/// fixed-length slot. Every note in `notes` is sounded together.
 #[allow(clippy::too_many_arguments)]
 fn render_one(
     conn: &mut MidiOutputConnection,
     capture: &Capture,
-    midi: u8,
+    notes: &[u8],
     args: &RenderArgs,
     slot_length: f64,
+    out_channels: u16,
     note_on: u8,
     note_off: u8,
     shutdown: &Arc<AtomicBool>,
 ) -> Vec<f32> {
+    let send_off = |conn: &mut MidiOutputConnection| {
+        for &n in notes {
+            let _ = conn.send(&[note_off, n, 0]);
+        }
+    };
+
     sleep(Duration::from_millis(args.pre_roll_ms));
 
     capture.arm();
-    let _ = conn.send(&[note_on, midi, args.velocity]);
+    for &n in notes {
+        let _ = conn.send(&[note_on, n, args.velocity]);
+    }
 
     let slot_ms = (slot_length * 1000.0).round() as u64;
     // If the note is held at least as long as the slot, release just before the
@@ -322,12 +402,12 @@ fn render_one(
     let mut sent_off = false;
     while elapsed < slot_ms {
         if shutdown.load(Ordering::SeqCst) {
-            let _ = conn.send(&[note_off, midi, 0]);
+            send_off(conn);
             sent_off = true;
             break;
         }
         if !sent_off && elapsed >= note_off_at {
-            let _ = conn.send(&[note_off, midi, 0]);
+            send_off(conn);
             sent_off = true;
         }
         let step = chunk.min(slot_ms - elapsed);
@@ -335,7 +415,7 @@ fn render_one(
         elapsed += step;
     }
     if !sent_off {
-        let _ = conn.send(&[note_off, midi, 0]);
+        send_off(conn);
     }
 
     let native = capture.disarm_take();
@@ -343,11 +423,11 @@ fn render_one(
         &native,
         capture.native_rate,
         capture.native_channels,
-        args.channels.count(),
+        out_channels,
         slot_length,
     );
     let fade_frames = (args.fade_ms as f64 * M8_SAMPLE_RATE as f64 / 1000.0) as usize;
-    audio::apply_end_fade(&mut slot, args.channels.count(), fade_frames);
+    audio::apply_end_fade(&mut slot, out_channels, fade_frames);
     slot
 }
 
@@ -366,6 +446,51 @@ fn rendered_bounds(statuses: &[String]) -> Option<(usize, usize)> {
     let first = statuses.iter().position(|s| s == "rendered")?;
     let last = statuses.iter().rposition(|s| s == "rendered")?;
     Some((first, last))
+}
+
+/// Filename tag for the current mode: the chord quality for `--chord`,
+/// `"packed"` for `--chords`, or `None` for plain single notes.
+fn chord_tag(args: &RenderArgs) -> Option<String> {
+    if !args.chords.is_empty() {
+        Some("packed".to_string())
+    } else {
+        args.chord.map(|q| q.short().to_string())
+    }
+}
+
+/// Choose the roots for packed mode: the probed sounding roots (or the whole
+/// `start..=end` range when probing is off), spread evenly so that every selected
+/// quality fits within `max_slices`.
+fn packed_roots(args: &RenderArgs, probe_map: &[Slot], probed: &Option<Vec<bool>>) -> Vec<u8> {
+    let pool: Vec<u8> = match probed {
+        Some(p) => probe_map
+            .iter()
+            .zip(p.iter())
+            .filter(|&(_, &s)| s)
+            .map(|(slot, _)| slot.midi)
+            .collect(),
+        None => (args.start_midi..=args.end_midi).collect(),
+    };
+    // Fall back to the full range if probing found nothing.
+    let pool = if pool.is_empty() {
+        (args.start_midi..=args.end_midi).collect::<Vec<u8>>()
+    } else {
+        pool
+    };
+    fit_roots(&pool, args.chords.len(), args.max_slices)
+}
+
+/// From a pool of candidate roots, pick the ones to actually use so that
+/// `num_qualities` copies all fit within `max_slices`: each quality gets
+/// `max_slices / num_qualities` roots (at least one), spread evenly across the
+/// pool, capped at the pool size.
+fn fit_roots(pool: &[u8], num_qualities: usize, max_slices: usize) -> Vec<u8> {
+    let per_quality = (max_slices / num_qualities.max(1)).max(1).min(pool.len());
+    let idx: Vec<usize> = (0..pool.len()).collect();
+    pick_spread(&idx, per_quality)
+        .iter()
+        .map(|&i| pool[i])
+        .collect()
 }
 
 /// Peak absolute sample value of a buffer.
@@ -420,26 +545,33 @@ fn measure_slot_length(
     conn: &mut MidiOutputConnection,
     capture: &Capture,
     args: &RenderArgs,
-    sample_midis: &[u8],
+    sample_notes: &[Vec<u8>],
     note_on: u8,
     note_off: u8,
     shutdown: &Arc<AtomicBool>,
 ) -> f64 {
     println!(
         "Measuring ring-out of {} note(s) to size the slot...",
-        sample_midis.len()
+        sample_notes.len()
     );
     let max_ms = (args.max_slot_length * 1000.0).round() as u64;
     let hold_ms = (args.note_length * 1000.0).round() as u64;
     let tail_window = (capture.native_rate as f64 * 0.15).round() as usize; // 150 ms
     let mut longest = 0.0f64;
 
-    for &midi in sample_midis {
+    for notes in sample_notes {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
+        let send_off = |conn: &mut MidiOutputConnection| {
+            for &n in notes {
+                let _ = conn.send(&[note_off, n, 0]);
+            }
+        };
         capture.arm();
-        let _ = conn.send(&[note_on, midi, args.velocity]);
+        for &n in notes {
+            let _ = conn.send(&[note_on, n, args.velocity]);
+        }
 
         let mut elapsed = 0u64;
         let mut released = false;
@@ -450,7 +582,7 @@ fn measure_slot_length(
                 break;
             }
             if !released && elapsed >= hold_ms {
-                let _ = conn.send(&[note_off, midi, 0]);
+                send_off(conn);
                 released = true;
             }
             let step = chunk.min(max_ms - elapsed);
@@ -469,7 +601,7 @@ fn measure_slot_length(
             }
         }
         if !released {
-            let _ = conn.send(&[note_off, midi, 0]);
+            send_off(conn);
         }
         let native = capture.disarm_take();
         let tail = last_sound_seconds(
@@ -478,10 +610,8 @@ fn measure_slot_length(
             capture.native_channels,
             args.decay_threshold,
         );
-        println!(
-            "  MIDI {midi:>3} {:<4}  tail {tail:.2}s",
-            midi_to_m8_note(midi)
-        );
+        let root = notes.first().copied().unwrap_or(0);
+        println!("  MIDI {root:>3} {:<4}  tail {tail:.2}s", midi_to_m8_note(root));
         longest = longest.max(tail);
     }
     all_notes_off(conn, args.channel - 1);
@@ -524,16 +654,18 @@ fn probe_sounding(
             break;
         }
         print!(
-            "\rProbe {:>3}/{}  MIDI {:>3}  {:<4}   ",
+            "\rProbe {:>3}/{}  MIDI {:>3}  {:<8}   ",
             i + 1,
             slot_map.len(),
             slot.midi,
-            slot.m8_note
+            slot.label
         );
         let _ = std::io::stdout().flush();
 
         capture.arm();
-        let _ = conn.send(&[note_on, slot.midi, args.velocity]);
+        for &n in &slot.notes {
+            let _ = conn.send(&[note_on, n, args.velocity]);
+        }
 
         let mut elapsed = 0u64;
         let chunk = 25u64;
@@ -545,7 +677,9 @@ fn probe_sounding(
             sleep(Duration::from_millis(step));
             elapsed += step;
         }
-        let _ = conn.send(&[note_off, slot.midi, 0]);
+        for &n in &slot.notes {
+            let _ = conn.send(&[note_off, n, 0]);
+        }
         let native = capture.disarm_take();
         sounding[i] = is_sounding(peak_abs(&native), args.probe_threshold);
     }
@@ -584,6 +718,8 @@ fn build_config(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default()
     };
+    // The M8 SLICE setting is the slice count in hex (128 -> "80", 120 -> "78").
+    let slice_hex = format!("{slice_count:02X}");
     RenderConfig {
         mode: "midi-render".to_string(),
         output_wav: file_name(wav_path),
@@ -608,9 +744,13 @@ fn build_config(
             slot_length_seconds: slot_length,
             pre_roll_ms: args.pre_roll_ms,
             slice_count,
-            m8_slice_hex: "80".to_string(),
+            m8_slice_hex: slice_hex.clone(),
+            chord: chord_tag(args),
         },
-        m8: M8Config::standard(),
+        m8: M8Config {
+            slice: slice_hex,
+            ..M8Config::standard()
+        },
     }
 }
 
@@ -642,11 +782,41 @@ fn eta_label(elapsed: Duration, done: usize, total: usize) -> String {
     format!("~{remaining_min:.1} min left")
 }
 
-fn print_plan(args: &RenderArgs, slot_map: &[Slot], out_channels: u16) {
-    let total = slot_map.len() as f64 * args.slot_length;
-    let padded = output::numbered_wav_path(&args.output, slot_map.len(), args.note_length, false);
+fn print_plan(args: &RenderArgs, slot_map: &[Slot]) {
+    let packed = !args.chords.is_empty();
+    let tag = chord_tag(args);
+    // Packed slice count: without a probe the playable range is the full request,
+    // so this is the worst-case (largest) layout.
+    let slice_count = if packed {
+        let range = slot_map.len(); // start..=end
+        let per_quality = (args.max_slices / args.chords.len().max(1))
+            .max(1)
+            .min(range);
+        per_quality * args.chords.len()
+    } else {
+        slot_map.len()
+    };
+    let total = slice_count as f64 * args.slot_length;
+    // Filename layout token: unresolved until a device opens, so "auto" here.
+    let layout_tag = match args.channels {
+        crate::cli::Channels::Auto => "auto",
+        crate::cli::Channels::Mono => "mono",
+        crate::cli::Channels::Stereo => "stereo",
+    };
+    let padded = output::numbered_wav_path(
+        &args.output,
+        tag.as_deref(),
+        layout_tag,
+        slice_count,
+        args.note_length,
+        false,
+    );
     let (csv, json) = output::sidecar_paths(&padded);
-    let layout = if out_channels == 1 { "mono" } else { "stereo" };
+    let layout = match args.channels {
+        crate::cli::Channels::Auto => "auto (matches source)",
+        crate::cli::Channels::Mono => "mono",
+        crate::cli::Channels::Stereo => "stereo",
+    };
     let midi_output = if args.virtual_midi {
         "virtual port 'midi-sampler-to-m8'".to_string()
     } else {
@@ -655,12 +825,38 @@ fn print_plan(args: &RenderArgs, slot_map: &[Slot], out_channels: u16) {
     println!("DRY RUN — no devices are opened\n");
     println!("  MIDI output : {midi_output}");
     println!("  Audio input : {}", args.audio_input);
-    println!(
-        "  Notes       : {}..{} ({} slots, slot index = MIDI note)",
-        args.start_midi,
-        args.end_midi,
-        slot_map.len()
-    );
+    if packed {
+        let qualities = args
+            .chords
+            .iter()
+            .map(|q| q.short())
+            .collect::<Vec<_>>()
+            .join(",");
+        println!(
+            "  Chords      : packed [{}] across roots {}..{} -> {} slices (max {})",
+            qualities, args.start_midi, args.end_midi, slice_count, args.max_slices
+        );
+        if args.no_probe && !args.auto_slot_length {
+            println!(
+                "  warning     : --no-probe packs the full range, so unplayable notes may be recorded as blank chords"
+            );
+        }
+    } else if let Some(q) = args.chord {
+        println!(
+            "  Chords      : {} rooted at notes {}..{} ({} slots, slice index = root note)",
+            q.short(),
+            args.start_midi,
+            args.end_midi,
+            slot_map.len()
+        );
+    } else {
+        println!(
+            "  Notes       : {}..{} ({} slots, slot index = MIDI note)",
+            args.start_midi,
+            args.end_midi,
+            slot_map.len()
+        );
+    }
     println!("  Velocity    : {}", args.velocity);
     println!("  Channel     : {}", args.channel);
     println!("  Note length : {}s", args.note_length);
@@ -687,7 +883,7 @@ fn print_plan(args: &RenderArgs, slot_map: &[Slot], out_channels: u16) {
         M8_SAMPLE_RATE
     );
     println!("  Unpadded WAV: an extra copy with leading/trailing silent slots removed (count set at runtime)");
-    if args.csv {
+    if args.csv || packed {
         println!("  CSV map     : {}", csv.display());
     }
     if args.json {
@@ -741,11 +937,12 @@ fn print_summary(
         slot_length,
         (slot_length * M8_SAMPLE_RATE as f64).round() as usize
     );
+    let slice_hex = format!("{:02X}", slot_map.len());
     println!("\nLoad on the M8:");
     println!("  1. Copy the WAV to your M8 SD card.");
     println!("  2. Create a Sampler instrument and load the WAV.");
-    println!("  3. Set:  SLICE = 80   PLAY = FWD   START = 00   LEN = FF");
-    println!("  Each slice then maps to its MIDI note (slot index = MIDI note).");
+    println!("  3. Set:  SLICE = {slice_hex}   PLAY = FWD   START = 00   LEN = FF");
+    println!("  Each slice then maps to its slot (slot index = the note you press).");
 }
 
 #[cfg(test)]
@@ -820,6 +1017,20 @@ mod tests {
         buf.extend(std::iter::repeat_n(0.0f32, 100));
         let t = last_sound_seconds(&buf, 1000, 2, 0.003);
         assert!((t - 0.05).abs() < 1e-9, "got {t}");
+    }
+
+    #[test]
+    fn fit_roots_balances_roots_against_qualities() {
+        let pool: Vec<u8> = (36..=96).collect(); // 61 candidate roots
+        // 10 qualities into 128 slices -> 12 roots each (120 slices total).
+        let roots = fit_roots(&pool, 10, 128);
+        assert_eq!(roots.len(), 12);
+        assert_eq!(roots.first(), Some(&36));
+        assert_eq!(roots.last(), Some(&96));
+        // Few qualities -> finer root coverage, but never more than the pool.
+        assert_eq!(fit_roots(&pool, 1, 128).len(), 61);
+        // A tiny pool caps the per-quality count.
+        assert_eq!(fit_roots(&[60, 62], 3, 128).len(), 2);
     }
 
     #[test]
