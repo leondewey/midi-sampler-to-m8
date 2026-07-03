@@ -27,8 +27,8 @@ struct BaseChain {
     slot_map: Vec<Slot>,
     /// Filename tag: `notes`, `maj`, `maj-min-dim`, …
     tag: String,
-    /// Write the CSV legend even without `--csv` (chord files need the map).
-    csv_default: bool,
+    /// Whether this is a packed chord file (used only to tag the JSON sidecar).
+    is_chord: bool,
 }
 
 /// Per-font analysis done before the job fan-out: the slot length to use and the
@@ -51,8 +51,8 @@ struct Job {
     velocity: u8,
     /// Variation index; 0 is the clean take, >0 apply seeded velocity jitter.
     variation: u32,
-    /// Write the CSV legend by default (chord files).
-    csv_default: bool,
+    /// Whether this is a packed chord file (used only to tag the JSON sidecar).
+    is_chord: bool,
     /// Filename tag, e.g. `notes`, `maj-min-dim_v80_take02`.
     name: String,
     /// Human label for the per-file summary line.
@@ -309,14 +309,14 @@ fn base_chains(args: &RenderSfzArgs, slot_length: f64, chord_roots: &[u8]) -> Ve
         chains.push(BaseChain {
             slot_map: build_slot_map(args.start_midi, args.end_midi, slot_length, None),
             tag: "notes".to_string(),
-            csv_default: false,
+            is_chord: false,
         });
     }
     if let Some(q) = args.chord {
         chains.push(BaseChain {
             slot_map: build_slot_map(args.start_midi, args.end_midi, slot_length, Some(q)),
             tag: q.short().to_string(),
-            csv_default: false,
+            is_chord: true,
         });
     }
     if !chords.is_empty() {
@@ -327,7 +327,7 @@ fn base_chains(args: &RenderSfzArgs, slot_length: f64, chord_roots: &[u8]) -> Ve
             chains.push(BaseChain {
                 slot_map: chord_slots(chord_roots, &chunk, slot_length),
                 tag,
-                csv_default: true,
+                is_chord: true,
             });
         }
     }
@@ -364,7 +364,7 @@ fn build_jobs(args: &RenderSfzArgs, velocities: &[u8], font_preps: &[FontPrep]) 
                         slot_length,
                         velocity,
                         variation,
-                        csv_default: chain.csv_default,
+                        is_chord: chain.is_chord,
                         label: format!("{font} / {name}"),
                         name,
                     });
@@ -481,7 +481,7 @@ fn write_job_outputs(
     }
 
     let (csv_path, json_path) = output::sidecar_paths(&padded_path);
-    if args.csv || job.csv_default {
+    if args.csv {
         output::write_csv_map(&csv_path, &job.slot_map, job.velocity, statuses)?;
         written.push(csv_path.clone());
     }
@@ -542,8 +542,7 @@ fn build_config(
             pre_roll_ms: 0,
             slice_count,
             m8_slice_hex: slice_hex.clone(),
-            chord: (job.csv_default || args.chord.is_some())
-                .then(|| job.name.clone()),
+            chord: (job.is_chord || args.chord.is_some()).then(|| job.name.clone()),
         },
         m8: M8Config {
             slice: slice_hex,
@@ -722,8 +721,8 @@ mod tests {
         assert_eq!(jobs.len(), 8);
         assert!(jobs.iter().any(|j| j.name == "maj_v40_take01"));
         assert!(jobs.iter().any(|j| j.name == "min_v90_take02"));
-        // Chord jobs carry the CSV-by-default flag.
-        assert!(jobs.iter().all(|j| j.csv_default));
+        // These are all chord jobs (tagged for the JSON sidecar only).
+        assert!(jobs.iter().all(|j| j.is_chord));
     }
 
     #[test]
@@ -753,7 +752,7 @@ mod tests {
         let sounding: Vec<u8> = (60..70).collect();
         let packed: Vec<_> = base_chains(&a, 5.0, &sounding)
             .into_iter()
-            .filter(|c| c.csv_default)
+            .filter(|c| c.is_chord)
             .collect();
         assert_eq!(packed.len(), 1);
         assert_eq!(packed[0].slot_map.len(), 20, "10 sounding roots x 2 qualities");
@@ -762,7 +761,7 @@ mod tests {
         a.file_per_chord = true;
         let per: Vec<_> = base_chains(&a, 5.0, &sounding)
             .into_iter()
-            .filter(|c| c.csv_default)
+            .filter(|c| c.is_chord)
             .collect();
         assert_eq!(per.len(), 2, "one file per quality");
         assert!(per.iter().all(|c| c.slot_map.len() == 10), "compact to sounding roots");

@@ -120,8 +120,8 @@ These live-path flags work here too:
 - **`--chord <quality>`** — one quality, slice = root (press C4 → recorded C4 chord). Spans
   the full range like the note chain, so it stays key-aligned.
 - **`--chords maj,min,dim`** (or no value for all) — pack chord files into as many WAVs as
-  fit `--max-slices`. These files are read via the `_map.csv` legend (written by default),
-  so they're **not** key-aligned — instead the roots are compacted to the notes that
+  fit `--max-slices`. These files are **not** key-aligned (pass `--csv` to get the `_map.csv`
+  legend that says which slice is which chord); their roots are compacted to the notes that
   actually sound, found by a quick **probe** (see below). `--file-per-chord` writes one
   quality per file.
 - **`--notes`** — also emit the plain note chain alongside chord files (it's already the
