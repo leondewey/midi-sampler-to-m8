@@ -394,12 +394,13 @@ pub struct RenderSfzArgs {
     #[arg(long, value_enum, default_value_t = Channels::Auto)]
     pub channels: Channels,
 
-    /// First MIDI note to render (0..=127).
-    #[arg(long, default_value_t = 21)]
+    /// First MIDI note to render (0..=127). The default full range makes each
+    /// slot index equal its MIDI note, so samples map 1:1 to M8 keys.
+    #[arg(long, default_value_t = 0)]
     pub start_midi: u8,
 
     /// Last MIDI note to render (0..=127).
-    #[arg(long, default_value_t = 108)]
+    #[arg(long, default_value_t = 127)]
     pub end_midi: u8,
 
     /// Render a chord of this quality rooted at each note (slice = root).
@@ -448,6 +449,21 @@ pub struct RenderSfzArgs {
     /// Seconds of margin added after the measured tail, for auto slot length.
     #[arg(long, default_value_t = 0.7)]
     pub slot_margin: f64,
+
+    /// Skip the probe pass. Packed --chords then use the full --start/--end range
+    /// as roots (including keys the instrument doesn't cover).
+    #[arg(long)]
+    pub no_probe: bool,
+
+    /// Probe note length, in milliseconds (how long each note sounds while
+    /// detecting whether it produces sound). Used for --chords and to focus
+    /// --auto-slot-length on sounding notes.
+    #[arg(long, default_value_t = 250)]
+    pub probe_ms: u64,
+
+    /// Peak level (0.0..=1.0) above which a probed note counts as sounding.
+    #[arg(long, default_value_t = 0.003)]
+    pub probe_threshold: f32,
 
     /// Number of variation takes per chain (default 1). Takes beyond the first
     /// apply seeded per-note velocity jitter so each is a distinct render.
@@ -586,6 +602,12 @@ impl RenderSfzArgs {
                     self.max_slices
                 );
             }
+        }
+        if self.probe_ms == 0 {
+            bail!("probe-ms must be greater than 0");
+        }
+        if self.probe_threshold < 0.0 || self.probe_threshold.is_nan() {
+            bail!("probe-threshold must be >= 0 (got {})", self.probe_threshold);
         }
         Ok(())
     }

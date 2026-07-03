@@ -780,7 +780,7 @@ fn octave_groups(roots: &[u8]) -> Vec<(u8, Vec<u8>)> {
 }
 
 /// Pick `count` roots spread evenly across `pool` (capped at the pool size).
-fn fit_roots(pool: &[u8], count: usize) -> Vec<u8> {
+pub(crate) fn fit_roots(pool: &[u8], count: usize) -> Vec<u8> {
     let count = count.max(1).min(pool.len());
     let idx: Vec<usize> = (0..pool.len()).collect();
     pick_spread(&idx, count).iter().map(|&i| pool[i]).collect()

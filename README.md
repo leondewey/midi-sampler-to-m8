@@ -117,28 +117,44 @@ These live-path flags work here too:
   Measured **per font**, so batching a piano and a pluck sizes each correctly. If a few mid
   notes ring longer than the sampled set, raise `--measure-notes` (cheap offline) or set
   `--slot-length` manually.
-- **`--chord <quality>`** — one quality, slice = root (press C4 → recorded C4 chord).
+- **`--chord <quality>`** — one quality, slice = root (press C4 → recorded C4 chord). Spans
+  the full range like the note chain, so it stays key-aligned.
 - **`--chords maj,min,dim`** (or no value for all) — pack chord files into as many WAVs as
-  fit `--max-slices` (roots = the rendered `--start`/`--end` range; no probe needed offline).
-  `--file-per-chord` writes one file per quality. Chord files get the `_map.csv` legend by
-  default.
+  fit `--max-slices`. These files are read via the `_map.csv` legend (written by default),
+  so they're **not** key-aligned — instead the roots are compacted to the notes that
+  actually sound, found by a quick **probe** (see below). `--file-per-chord` writes one
+  quality per file.
 - **`--notes`** — also emit the plain note chain alongside chord files (it's already the
   default when no chord flags are given).
 
-Example — a full piano in one shot (measures decay, then notes + maj/min/dim in parallel):
+**Default range and padding.** `render-sfz` defaults to the full **0..127 (128 slots,
+`SLICE=80`)** so each slot index equals its MIDI note and samples map 1:1 to M8 keys — keys
+the instrument doesn't cover are written as silent slots (the padding). Narrow with
+`--start-midi`/`--end-midi` only if you deliberately want a shorter chain.
+
+**The probe.** For `--chords` (and to focus `--auto-slot-length` on real notes), the tool
+first does a quick throwaway render of the range and keeps the notes whose peak reaches
+`--probe-threshold` (default 0.003, `--probe-ms` 250). Packed chord files then contain only
+those sounding roots, so they stay compact (e.g. an 88-key piano → 88-slot chord files,
+`SLICE=58`, not 128 with silent padding). `--no-probe` falls back to the full range.
+
+Example — a full piano in one shot (probe → measure decay → notes padded to 128 + one
+compact file per chord quality, all in parallel):
 
 ```bash
 midi-sampler-to-m8 render-sfz \
   --sfz IvyAudio-PianoIn162-Close.sfz \
   --auto-slot-length --note-length 0.25 \
-  --notes --chords maj,min,dim \
+  --notes --chords maj,min,dim --file-per-chord \
   --output ./output/PianoIn162.wav
+# -> notes_…_128slots.wav (SLICE=80) + maj/min/dim_…_88slots.wav (SLICE=58) each
 ```
 
 Filenames encode only the axes you actually varied, e.g.
 `Piano/notes_v80_take02_1s_13slots.wav`. `--channels`, `--unpadded`, `--csv`, and `--json`
 work just like the live path. Preview the exact set of files a run would produce with
-`--dry-run` (it never invokes the engine).
+`--dry-run` (it never invokes the engine; chord slot counts there are the full-range upper
+bound before the probe narrows them).
 
 > Not yet ported from the live path: `--per-octave` chord layout. SF2 support and an
 > in-process `libsfizz` backend (dropping the per-chain subprocess) are possible follow-ups.
@@ -202,4 +218,4 @@ cargo build
 cargo test
 ```
 
-All tests pass (72 unit tests + 11 integration tests).
+All tests pass (73 unit tests + 11 integration tests).

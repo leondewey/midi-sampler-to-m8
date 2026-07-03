@@ -168,12 +168,14 @@ fn render_sfz_notes_plus_chords_lists_all_files() {
         .assert()
         .success()
         .stdout(predicate::str::contains("measured per font at runtime"))
-        // Default 21..108 (88 roots): each quality overflows the 128-slice budget
-        // on its own, so maj/min/dim pack one-per-file -> notes + 3 chord files.
+        // Default 0..127: notes chain pads to 128; each quality fills the 128-slice
+        // budget, so maj/min/dim pack one-per-file -> notes + 3 chord files. (Chord
+        // roots are narrowed to the sounding set at runtime; dry-run shows the
+        // full-range upper bound.)
         .stdout(predicate::str::contains("Output files (4)"))
-        .stdout(predicate::str::contains("notes_0.25s_88slots.wav"))
-        .stdout(predicate::str::contains("maj_0.25s_88slots.wav"))
-        .stdout(predicate::str::contains("dim_0.25s_88slots.wav"));
+        .stdout(predicate::str::contains("notes_0.25s_128slots.wav"))
+        .stdout(predicate::str::contains("maj_0.25s_128slots.wav"))
+        .stdout(predicate::str::contains("dim_0.25s_128slots.wav"));
 }
 
 #[test]

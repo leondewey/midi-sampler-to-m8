@@ -14,7 +14,7 @@ use crate::cli::RenderSfzArgs;
 use crate::config::{AudioConfig, FormatConfig, M8Config, MidiConfig, RenderConfig, RenderParams};
 use crate::notes::{Slot, build_slot_map, chord_slots, midi_to_m8_note};
 use crate::output;
-use crate::render::{last_sound_seconds, pick_spread, split_chord_files};
+use crate::render::{fit_roots, last_sound_seconds, pick_spread, split_chord_files};
 use crate::sfz;
 use crate::wav::{self, M8_SAMPLE_RATE};
 use anyhow::{Context, Result};
@@ -29,6 +29,13 @@ struct BaseChain {
     tag: String,
     /// Write the CSV legend even without `--csv` (chord files need the map).
     csv_default: bool,
+}
+
+/// Per-font analysis done before the job fan-out: the slot length to use and the
+/// chord roots (the sounding notes, capped to the slice budget).
+struct FontPrep {
+    slot_length: f64,
+    chord_roots: Vec<u8>,
 }
 
 /// One output file to render: a base chain of a font, at a velocity, one take.
@@ -64,9 +71,18 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     let velocities = args.resolved_velocities();
 
     if args.dry_run {
-        // No engine and no measurement: preview with the fixed slot length.
-        let placeholder = vec![args.slot_length; args.sfz.len()];
-        let jobs = build_jobs(args, &velocities, &placeholder);
+        // No engine, probe, or measurement: preview with the fixed slot length and
+        // the full range as chord roots (narrowed to the sounding set at runtime).
+        let full: Vec<u8> = (args.start_midi..=args.end_midi).collect();
+        let preps: Vec<FontPrep> = args
+            .sfz
+            .iter()
+            .map(|_| FontPrep {
+                slot_length: args.slot_length,
+                chord_roots: full.clone(),
+            })
+            .collect();
+        let jobs = build_jobs(args, &velocities, &preps);
         print_plan(args, &jobs);
         return Ok(());
     }
@@ -75,26 +91,20 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     let engine = sfz::locate_engine(args.sfizz_render.as_deref())?;
     println!("Engine      : {}", engine.display());
 
-    // Per-font slot length: measured (offline) with --auto-slot-length, else fixed.
-    let font_slot_lengths: Vec<f64> = if args.auto_slot_length {
-        let meas_vel = velocities.iter().copied().max().unwrap_or(100);
-        println!(
-            "Measuring ring-out ({} note(s) per font, max {}s)...",
-            args.measure_notes, args.max_slot_length
-        );
-        args.sfz
-            .iter()
-            .map(|sfz| {
-                let len = measure_slot_length(&engine, sfz, args, meas_vel)?;
-                println!("  {:<28} slot {len:.2}s", font_stem(sfz));
-                Ok(len)
-            })
-            .collect::<Result<Vec<_>>>()?
-    } else {
-        vec![args.slot_length; args.sfz.len()]
-    };
+    // Per-font analysis: probe the sounding set (for compact --chords and to focus
+    // the ring-out measurement), then size the slots.
+    let meas_vel = velocities.iter().copied().max().unwrap_or(100);
+    let need_probe = !args.no_probe && (args.chords.is_some() || args.auto_slot_length);
+    if need_probe {
+        println!("Probing sounding range ({} ms/note)...", args.probe_ms);
+    }
+    let preps: Vec<FontPrep> = args
+        .sfz
+        .iter()
+        .map(|sfz| font_prep(&engine, sfz, args, &velocities, meas_vel, need_probe))
+        .collect::<Result<Vec<_>>>()?;
 
-    let jobs = build_jobs(args, &velocities, &font_slot_lengths);
+    let jobs = build_jobs(args, &velocities, &preps);
     println!("Chains      : {}", jobs.len());
 
     let pool = {
@@ -151,30 +161,98 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     Ok(())
 }
 
-/// Measure a font's longest ring-out and return a slot length that covers it plus
-/// the margin, clamped to `[0.25, max_slot_length]`. Offline mirror of the live
-/// `render::measure_slot_length`: render a spread of notes with a generous slot
-/// length so tails don't overlap, then read each tail's end.
-fn measure_slot_length(engine: &Path, sfz: &Path, args: &RenderSfzArgs, velocity: u8) -> Result<f64> {
-    let range: Vec<usize> = (0..=(args.end_midi - args.start_midi) as usize).collect();
-    let notes: Vec<u8> = pick_spread(&range, args.measure_notes as usize)
-        .iter()
-        .map(|&i| args.start_midi + i as u8)
-        .collect();
-    // Minimal single-note slots; build_chain_smf only reads `notes` and the index.
-    let meas_slots: Vec<Slot> = notes
+/// Analyse one font: probe its sounding range (for compact `--chords` and to
+/// focus measurement), size the slots (`--auto-slot-length` or the fixed value),
+/// and derive the chord roots (sounding notes capped to the slice budget).
+fn font_prep(
+    engine: &Path,
+    sfz: &Path,
+    args: &RenderSfzArgs,
+    velocities: &[u8],
+    meas_vel: u8,
+    need_probe: bool,
+) -> Result<FontPrep> {
+    let full: Vec<u8> = (args.start_midi..=args.end_midi).collect();
+    let sounding = if need_probe {
+        probe_sounding(engine, sfz, args, meas_vel)?
+    } else {
+        full.clone()
+    };
+    let pool = if sounding.is_empty() { &full } else { &sounding };
+
+    let slot_length = if args.auto_slot_length {
+        let len = measure_slot_length(engine, sfz, args, pool, meas_vel)?;
+        println!(
+            "  {:<28} {} sounding, slot {len:.2}s",
+            font_stem(sfz),
+            sounding.len()
+        );
+        len
+    } else {
+        if need_probe {
+            println!("  {:<28} {} sounding", font_stem(sfz), sounding.len());
+        }
+        args.slot_length
+    };
+
+    // Chord roots: the sounding notes, capped to the per-file slice budget.
+    let chord_roots = if pool.len() > args.max_slices {
+        fit_roots(pool, args.max_slices)
+    } else {
+        pool.clone()
+    };
+    let _ = velocities; // reserved for future per-velocity probing
+    Ok(FontPrep {
+        slot_length,
+        chord_roots,
+    })
+}
+
+/// Probe which notes in `start..=end` produce sound: render each briefly and keep
+/// the ones whose peak reaches `--probe-threshold`. Offline analogue of the live
+/// `render::probe_sounding` (which uses live capture).
+fn probe_sounding(engine: &Path, sfz: &Path, args: &RenderSfzArgs, velocity: u8) -> Result<Vec<u8>> {
+    let notes: Vec<u8> = (args.start_midi..=args.end_midi).collect();
+    let slots = single_note_slots(&notes);
+    let slot_ms = args.probe_ms as u32;
+    let note_ms = args.probe_ms.saturating_sub(50).max(1) as u32;
+    let vels = vec![velocity; slots.len()];
+    let smf = sfz::build_chain_smf(&slots, slot_ms, note_ms, &vels);
+    let rendered = sfz::render_chain(engine, sfz, &smf, args.sample_rate)
+        .with_context(|| format!("probing {}", sfz.display()))?;
+
+    let sc = rendered.channels.max(1) as usize;
+    let fps = (args.probe_ms as f64 / 1000.0 * rendered.sample_rate as f64).round() as usize;
+    let sounding = notes
         .iter()
         .enumerate()
-        .map(|(i, &m)| Slot {
-            slot: i as u8,
-            midi: m,
-            m8_note: midi_to_m8_note(m),
-            notes: vec![m],
-            label: midi_to_m8_note(m),
-            start_seconds: 0.0,
-            end_seconds: 0.0,
+        .filter_map(|(i, &m)| {
+            let start = (i * fps * sc).min(rendered.samples.len());
+            let end = ((i + 1) * fps * sc).min(rendered.samples.len());
+            let peak = rendered.samples[start..end].iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+            (peak >= args.probe_threshold).then_some(m)
         })
         .collect();
+    Ok(sounding)
+}
+
+/// Measure the longest ring-out among `pool` and return a slot length covering it
+/// plus the margin, clamped to `[0.25, max_slot_length]`. Offline mirror of the
+/// live `render::measure_slot_length`: render a spread of notes with a generous
+/// slot length so tails don't overlap, then read each tail's end.
+fn measure_slot_length(
+    engine: &Path,
+    sfz: &Path,
+    args: &RenderSfzArgs,
+    pool: &[u8],
+    velocity: u8,
+) -> Result<f64> {
+    let idxs: Vec<usize> = (0..pool.len()).collect();
+    let notes: Vec<u8> = pick_spread(&idxs, args.measure_notes as usize)
+        .iter()
+        .map(|&i| pool[i])
+        .collect();
+    let meas_slots = single_note_slots(&notes);
 
     let slot_ms = (args.max_slot_length * 1000.0).round() as u32;
     let note_ms = (args.note_length * 1000.0).round() as u32;
@@ -200,11 +278,30 @@ fn measure_slot_length(engine: &Path, sfz: &Path, args: &RenderSfzArgs, velocity
     Ok((longest + args.slot_margin).clamp(0.25, args.max_slot_length))
 }
 
+/// Minimal single-note slots for probe/measurement SMFs. `build_chain_smf` only
+/// reads each slot's `notes` and its index, so the other fields are placeholders.
+fn single_note_slots(notes: &[u8]) -> Vec<Slot> {
+    notes
+        .iter()
+        .enumerate()
+        .map(|(i, &m)| Slot {
+            slot: i as u8,
+            midi: m,
+            m8_note: midi_to_m8_note(m),
+            notes: vec![m],
+            label: midi_to_m8_note(m),
+            start_seconds: 0.0,
+            end_seconds: 0.0,
+        })
+        .collect()
+}
+
 /// The distinct chains for one font at `slot_length`: the note chain (default or
 /// via `--notes`), an optional `--chord` slice=root chain, and the packed
-/// `--chords` files. Roots for packing are the whole rendered range (offline has
-/// no probe, so `--start/--end` bound the set).
-fn base_chains(args: &RenderSfzArgs, slot_length: f64) -> Vec<BaseChain> {
+/// `--chords` files. The note chain and `--chord` span the full `--start/--end`
+/// range (padded, key-aligned on the M8); `--chords` pack only `chord_roots`
+/// (the probed sounding notes), so those files stay compact.
+fn base_chains(args: &RenderSfzArgs, slot_length: f64, chord_roots: &[u8]) -> Vec<BaseChain> {
     let mut chains = Vec::new();
     let chords = args.resolved_chords();
 
@@ -223,11 +320,12 @@ fn base_chains(args: &RenderSfzArgs, slot_length: f64) -> Vec<BaseChain> {
         });
     }
     if !chords.is_empty() {
-        let roots: Vec<u8> = (args.start_midi..=args.end_midi).collect();
-        for chunk in split_chord_files(roots.len(), &chords, args.max_slices, args.file_per_chord) {
+        for chunk in
+            split_chord_files(chord_roots.len(), &chords, args.max_slices, args.file_per_chord)
+        {
             let tag = chunk.iter().map(|q| q.short()).collect::<Vec<_>>().join("-");
             chains.push(BaseChain {
-                slot_map: chord_slots(&roots, &chunk, slot_length),
+                slot_map: chord_slots(chord_roots, &chunk, slot_length),
                 tag,
                 csv_default: true,
             });
@@ -238,17 +336,18 @@ fn base_chains(args: &RenderSfzArgs, slot_length: f64) -> Vec<BaseChain> {
 
 /// Assemble the job list: fonts x base chains x velocities x variations. Tags
 /// disambiguate filenames only along the axes actually varied.
-fn build_jobs(args: &RenderSfzArgs, velocities: &[u8], font_slot_lengths: &[f64]) -> Vec<Job> {
+fn build_jobs(args: &RenderSfzArgs, velocities: &[u8], font_preps: &[FontPrep]) -> Vec<Job> {
     let multi_font = args.sfz.len() > 1;
     let multi_vel = velocities.len() > 1;
     let multi_var = args.variations > 1;
 
     let mut jobs = Vec::new();
     for (fi, sfz) in args.sfz.iter().enumerate() {
-        let slot_length = font_slot_lengths[fi];
+        let prep = &font_preps[fi];
+        let slot_length = prep.slot_length;
         let out_base = font_output_base(args, sfz, multi_font);
         let font = font_stem(sfz);
-        for chain in base_chains(args, slot_length) {
+        for chain in base_chains(args, slot_length, &prep.chord_roots) {
             for &velocity in velocities {
                 for variation in 0..args.variations {
                     let vel_tag = if multi_vel { format!("_v{velocity}") } else { String::new() };
@@ -545,6 +644,11 @@ fn print_plan(args: &RenderSfzArgs, jobs: &[Job]) {
         } else {
             println!("  Chords      : [{qs}] packed into files of <= {} slices", args.max_slices);
         }
+        if !args.no_probe {
+            println!(
+                "                (roots narrowed to the sounding set at runtime — chord slot counts below are the full-range upper bound)"
+            );
+        }
     }
     println!("\n  Output files ({}):", jobs.len());
     for job in jobs {
@@ -613,7 +717,7 @@ mod tests {
         a.velocities = Some(vec![40, 90]);
         a.variations = 2;
         let vels = a.resolved_velocities();
-        let jobs = build_jobs(&a, &vels, &[a.slot_length]);
+        let jobs = build_jobs(&a, &vels, &[prep(a.slot_length)]);
         // 2 base chains x 2 velocities x 2 variations = 8 jobs.
         assert_eq!(jobs.len(), 8);
         assert!(jobs.iter().any(|j| j.name == "maj_v40_take01"));
@@ -625,7 +729,7 @@ mod tests {
     #[test]
     fn single_axis_names_stay_bare() {
         let a = base_args();
-        let jobs = build_jobs(&a, &a.resolved_velocities(), &[a.slot_length]);
+        let jobs = build_jobs(&a, &a.resolved_velocities(), &[prep(a.slot_length)]);
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].name, "notes");
     }
@@ -634,10 +738,34 @@ mod tests {
     fn per_font_slot_length_flows_into_jobs() {
         let mut a = base_args();
         a.sfz = vec![PathBuf::from("a.sfz"), PathBuf::from("b.sfz")];
-        let jobs = build_jobs(&a, &a.resolved_velocities(), &[2.5, 7.0]);
+        let jobs = build_jobs(&a, &a.resolved_velocities(), &[prep(2.5), prep(7.0)]);
         let a_len = jobs.iter().find(|j| j.sfz.ends_with("a.sfz")).unwrap().slot_length;
         let b_len = jobs.iter().find(|j| j.sfz.ends_with("b.sfz")).unwrap().slot_length;
         assert_eq!((a_len, b_len), (2.5, 7.0));
+    }
+
+    #[test]
+    fn chords_pack_only_sounding_roots() {
+        // Chord files pack the sounding roots, not the full range. A 10-root
+        // sounding set: both qualities fit one file (10*2 <= 128) -> one 20-slot file.
+        let mut a = base_args();
+        a.chords = Some(vec![ChordQuality::Maj, ChordQuality::Min]);
+        let sounding: Vec<u8> = (60..70).collect();
+        let packed: Vec<_> = base_chains(&a, 5.0, &sounding)
+            .into_iter()
+            .filter(|c| c.csv_default)
+            .collect();
+        assert_eq!(packed.len(), 1);
+        assert_eq!(packed[0].slot_map.len(), 20, "10 sounding roots x 2 qualities");
+
+        // --file-per-chord: one quality per file, each compact to the sounding roots.
+        a.file_per_chord = true;
+        let per: Vec<_> = base_chains(&a, 5.0, &sounding)
+            .into_iter()
+            .filter(|c| c.csv_default)
+            .collect();
+        assert_eq!(per.len(), 2, "one file per quality");
+        assert!(per.iter().all(|c| c.slot_map.len() == 10), "compact to sounding roots");
     }
 
     #[test]
@@ -659,9 +787,19 @@ mod tests {
         );
     }
 
-    /// Tags of the base chains for a config (order-preserving).
+    /// Tags of the base chains for a config (order-preserving). Uses the full
+    /// range as chord roots (as the runtime does when the probe is skipped).
     fn base_chain_tags(args: &RenderSfzArgs) -> Vec<String> {
-        base_chains(args, 5.0).into_iter().map(|c| c.tag).collect()
+        let roots: Vec<u8> = (args.start_midi..=args.end_midi).collect();
+        base_chains(args, 5.0, &roots).into_iter().map(|c| c.tag).collect()
+    }
+
+    /// A `FontPrep` with the given slot length and a full 0..127 root set.
+    fn prep(slot_length: f64) -> FontPrep {
+        FontPrep {
+            slot_length,
+            chord_roots: (0u8..=127).collect(),
+        }
     }
 
     fn base_args() -> RenderSfzArgs {
@@ -687,6 +825,9 @@ mod tests {
             measure_notes: 8,
             decay_threshold: 0.000125,
             slot_margin: 0.7,
+            no_probe: false,
+            probe_ms: 250,
+            probe_threshold: 0.003,
             variations: 1,
             velocity_jitter: None,
             fade_ms: 10,
