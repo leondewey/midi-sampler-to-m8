@@ -106,15 +106,42 @@ parallel**:
 - **multiple `--sfz a.sfz b.sfz …`** — batch many fonts in one run, each in its own folder.
 - **`--jobs N`** — cap the parallel worker count (default: number of CPUs).
 
-Filenames encode only the axes you actually varied, e.g.
-`Piano/notes_v80_take02_1s_13slots.wav`. `--chord <quality>` (slice = root), `--channels`,
-`--unpadded`, `--csv`, and `--json` work just like the live path. Preview the exact set of
-files a run would produce with `--dry-run` (it never invokes the engine).
+### Auto slot length, chords, and the note chain
 
-> v1 scope: `render-sfz` covers the note chain, `--chord` (slice = root), velocity layers,
-> and variation takes. The live path's probe-driven `--chords` packing, `--per-octave`, and
-> `--auto-slot-length` are not yet ported (offline rendering needs no probe). SF2 support and
-> an in-process `libsfizz` backend are possible follow-ups.
+These live-path flags work here too:
+
+- **`--auto-slot-length`** — measure each font's ring-out (offline, from a spread of
+  `--measure-notes` notes) and size the slots to the longest tail plus `--slot-margin`,
+  instead of a fixed `--slot-length`. Pair with a short `--note-length` for snug slots.
+  Companions: `--max-slot-length`, `--measure-notes`, `--decay-threshold`, `--slot-margin`.
+  Measured **per font**, so batching a piano and a pluck sizes each correctly. If a few mid
+  notes ring longer than the sampled set, raise `--measure-notes` (cheap offline) or set
+  `--slot-length` manually.
+- **`--chord <quality>`** — one quality, slice = root (press C4 → recorded C4 chord).
+- **`--chords maj,min,dim`** (or no value for all) — pack chord files into as many WAVs as
+  fit `--max-slices` (roots = the rendered `--start`/`--end` range; no probe needed offline).
+  `--file-per-chord` writes one file per quality. Chord files get the `_map.csv` legend by
+  default.
+- **`--notes`** — also emit the plain note chain alongside chord files (it's already the
+  default when no chord flags are given).
+
+Example — a full piano in one shot (measures decay, then notes + maj/min/dim in parallel):
+
+```bash
+midi-sampler-to-m8 render-sfz \
+  --sfz IvyAudio-PianoIn162-Close.sfz \
+  --auto-slot-length --note-length 0.25 \
+  --notes --chords maj,min,dim \
+  --output ./output/PianoIn162.wav
+```
+
+Filenames encode only the axes you actually varied, e.g.
+`Piano/notes_v80_take02_1s_13slots.wav`. `--channels`, `--unpadded`, `--csv`, and `--json`
+work just like the live path. Preview the exact set of files a run would produce with
+`--dry-run` (it never invokes the engine).
+
+> Not yet ported from the live path: `--per-octave` chord layout. SF2 support and an
+> in-process `libsfizz` backend (dropping the per-chain subprocess) are possible follow-ups.
 
 ## Output files
 
@@ -175,4 +202,4 @@ cargo build
 cargo test
 ```
 
-All tests pass (69 unit tests + 9 integration tests).
+All tests pass (72 unit tests + 11 integration tests).

@@ -144,10 +144,54 @@ fn render_sfz_dry_run_prints_plan_without_engine() {
         .assert()
         .success()
         .stdout(predicate::str::contains("DRY RUN"))
-        .stdout(predicate::str::contains("13 slots"))
+        .stdout(predicate::str::contains("Notes range : 60..72"))
         // 1 font x 2 velocities x 2 variations = 4 chains, tagged by axis.
         .stdout(predicate::str::contains("Output files (4)"))
         .stdout(predicate::str::contains("notes_v40_take01_1s_13slots.wav"));
+}
+
+#[test]
+fn render_sfz_notes_plus_chords_lists_all_files() {
+    bin()
+        .args([
+            "render-sfz",
+            "--sfz",
+            "Piano.sfz",
+            "--note-length",
+            "0.25",
+            "--notes",
+            "--chords",
+            "maj,min,dim",
+            "--auto-slot-length",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("measured per font at runtime"))
+        // Default 21..108 (88 roots): each quality overflows the 128-slice budget
+        // on its own, so maj/min/dim pack one-per-file -> notes + 3 chord files.
+        .stdout(predicate::str::contains("Output files (4)"))
+        .stdout(predicate::str::contains("notes_0.25s_88slots.wav"))
+        .stdout(predicate::str::contains("maj_0.25s_88slots.wav"))
+        .stdout(predicate::str::contains("dim_0.25s_88slots.wav"));
+}
+
+#[test]
+fn render_sfz_chord_and_chords_are_mutually_exclusive() {
+    bin()
+        .args([
+            "render-sfz",
+            "--sfz",
+            "Piano.sfz",
+            "--chord",
+            "maj",
+            "--chords",
+            "min",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--chord"));
 }
 
 #[test]

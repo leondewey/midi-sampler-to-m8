@@ -385,7 +385,7 @@ fn job_sounding(job: &Job, probed: &Option<Vec<bool>>, args: &RenderArgs) -> Vec
 /// Partition chord qualities into per-file chunks, keeping each quality whole and
 /// each file within `max_slices` (given `roots_len` roots per quality). One
 /// quality per file when `file_per_chord`.
-fn split_chord_files(
+pub(crate) fn split_chord_files(
     roots_len: usize,
     qualities: &[crate::chords::ChordQuality],
     max_slices: usize,
@@ -798,7 +798,7 @@ fn is_sounding(peak: f32, threshold: f32) -> bool {
 
 /// Time (seconds) of the last frame whose level reaches `threshold` in an
 /// interleaved native-rate buffer. `0.0` if the buffer is entirely below it.
-fn last_sound_seconds(native: &[f32], rate: u32, channels: u16, threshold: f32) -> f64 {
+pub(crate) fn last_sound_seconds(native: &[f32], rate: u32, channels: u16, threshold: f32) -> f64 {
     let ch = channels.max(1) as usize;
     let frames = native.len() / ch;
     let mut last: Option<usize> = None;
@@ -815,7 +815,7 @@ fn last_sound_seconds(native: &[f32], rate: u32, channels: u16, threshold: f32) 
 
 /// Evenly spaced picks across `indices` (endpoints included for `n >= 2`,
 /// the middle element for `n == 1`). Returns at most `indices.len()` picks.
-fn pick_spread(indices: &[usize], n: usize) -> Vec<usize> {
+pub(crate) fn pick_spread(indices: &[usize], n: usize) -> Vec<usize> {
     if indices.is_empty() || n == 0 {
         return Vec::new();
     }

@@ -1,17 +1,20 @@
 //! The `render-sfz` command: render `.sfz` instruments offline into M8 sample
 //! chains, in parallel.
 //!
-//! For every combination of `.sfz` file x velocity x variation take, this
-//! authors a chain SMF, renders it with `sfizz_render` (faster than real time),
-//! slices the resulting WAV into fixed-length slots, and writes the same M8
-//! sample-chain WAV (plus optional sidecars) as the live `render` path. All jobs
-//! run concurrently on a rayon pool — the offline win the live capture can't get.
+//! For every combination of `.sfz` file x base chain (notes / chord / packed
+//! chord files) x velocity x variation take, this authors a chain SMF, renders
+//! it with `sfizz_render` (faster than real time), slices the resulting WAV into
+//! fixed-length slots, and writes the same M8 sample-chain WAV (plus optional
+//! sidecars) as the live `render` path. All jobs run concurrently on a rayon
+//! pool — the offline win the live capture can't get. With `--auto-slot-length`
+//! each font's ring-out is measured up front (offline, cheaply) to size its slots.
 
 use crate::audio;
 use crate::cli::RenderSfzArgs;
 use crate::config::{AudioConfig, FormatConfig, M8Config, MidiConfig, RenderConfig, RenderParams};
-use crate::notes::{Slot, build_slot_map};
+use crate::notes::{Slot, build_slot_map, chord_slots, midi_to_m8_note};
 use crate::output;
+use crate::render::{last_sound_seconds, pick_spread, split_chord_files};
 use crate::sfz;
 use crate::wav::{self, M8_SAMPLE_RATE};
 use anyhow::{Context, Result};
@@ -19,16 +22,31 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// One output file to render: a font at a velocity, one variation take.
+/// A distinct chain to render for one font, before the velocity/variation fan-out.
+struct BaseChain {
+    slot_map: Vec<Slot>,
+    /// Filename tag: `notes`, `maj`, `maj-min-dim`, …
+    tag: String,
+    /// Write the CSV legend even without `--csv` (chord files need the map).
+    csv_default: bool,
+}
+
+/// One output file to render: a base chain of a font, at a velocity, one take.
 struct Job {
     sfz: PathBuf,
     /// Base output path whose stem/parent define this font's output folder.
     out_base: PathBuf,
+    /// The chain's slots (already sized to `slot_length`).
+    slot_map: Vec<Slot>,
+    /// Slot length in seconds (per font when `--auto-slot-length`).
+    slot_length: f64,
     /// Base note-on velocity for the take.
     velocity: u8,
     /// Variation index; 0 is the clean take, >0 apply seeded velocity jitter.
     variation: u32,
-    /// Filename tag, e.g. `notes`, `maj`, `notes_v80_take02`.
+    /// Write the CSV legend by default (chord files).
+    csv_default: bool,
+    /// Filename tag, e.g. `notes`, `maj-min-dim_v80_take02`.
     name: String,
     /// Human label for the per-file summary line.
     label: String,
@@ -43,38 +61,41 @@ struct JobOutput {
 /// Run the `render-sfz` command.
 pub fn run(args: &RenderSfzArgs) -> Result<()> {
     args.validate()?;
-
-    let slots = build_slot_map(args.start_midi, args.end_midi, args.slot_length, args.chord);
     let velocities = args.resolved_velocities();
-    let jitter = args.effective_jitter();
-    let jobs = build_jobs(args, &velocities);
 
     if args.dry_run {
-        print_plan(args, &slots, &velocities, &jobs);
+        // No engine and no measurement: preview with the fixed slot length.
+        let placeholder = vec![args.slot_length; args.sfz.len()];
+        let jobs = build_jobs(args, &velocities, &placeholder);
+        print_plan(args, &jobs);
         return Ok(());
     }
 
     // Fail fast with a clear message if the engine is missing, before any work.
     let engine = sfz::locate_engine(args.sfizz_render.as_deref())?;
     println!("Engine      : {}", engine.display());
-    println!(
-        "Chains      : {} ({} font(s) x {} velocity(ies) x {} variation(s))",
-        jobs.len(),
-        args.sfz.len(),
-        velocities.len(),
-        args.variations
-    );
-    println!(
-        "Range       : MIDI {}..{} ({} slots), slot {}s, note {}s{}",
-        args.start_midi,
-        args.end_midi,
-        slots.len(),
-        args.slot_length,
-        args.note_length,
-        args.chord
-            .map(|q| format!(", chord {}", q.short()))
-            .unwrap_or_default(),
-    );
+
+    // Per-font slot length: measured (offline) with --auto-slot-length, else fixed.
+    let font_slot_lengths: Vec<f64> = if args.auto_slot_length {
+        let meas_vel = velocities.iter().copied().max().unwrap_or(100);
+        println!(
+            "Measuring ring-out ({} note(s) per font, max {}s)...",
+            args.measure_notes, args.max_slot_length
+        );
+        args.sfz
+            .iter()
+            .map(|sfz| {
+                let len = measure_slot_length(&engine, sfz, args, meas_vel)?;
+                println!("  {:<28} slot {len:.2}s", font_stem(sfz));
+                Ok(len)
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        vec![args.slot_length; args.sfz.len()]
+    };
+
+    let jobs = build_jobs(args, &velocities, &font_slot_lengths);
+    println!("Chains      : {}", jobs.len());
 
     let pool = {
         let mut b = rayon::ThreadPoolBuilder::new();
@@ -90,7 +111,7 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     let results: Vec<Result<JobOutput>> = pool.install(|| {
         jobs.par_iter()
             .map(|job| {
-                let out = render_job(job, &engine, args, &slots, jitter);
+                let out = render_job(job, &engine, args);
                 let k = done.fetch_add(1, Ordering::Relaxed) + 1;
                 match &out {
                     Ok(o) => println!("[{k}/{total}] {}", o.summary),
@@ -101,7 +122,6 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
             .collect()
     });
 
-    // Report: collect written paths, surface the first error (if any) at the end.
     let mut written: Vec<PathBuf> = Vec::new();
     let mut first_err: Option<anyhow::Error> = None;
     for r in results {
@@ -131,38 +151,125 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     Ok(())
 }
 
-/// Assemble the job list: the cartesian product of fonts x velocities x
-/// variations. Tags disambiguate filenames only along the axes actually varied.
-fn build_jobs(args: &RenderSfzArgs, velocities: &[u8]) -> Vec<Job> {
-    let role = args.chord.map(|q| q.short().to_string()).unwrap_or_else(|| "notes".to_string());
+/// Measure a font's longest ring-out and return a slot length that covers it plus
+/// the margin, clamped to `[0.25, max_slot_length]`. Offline mirror of the live
+/// `render::measure_slot_length`: render a spread of notes with a generous slot
+/// length so tails don't overlap, then read each tail's end.
+fn measure_slot_length(engine: &Path, sfz: &Path, args: &RenderSfzArgs, velocity: u8) -> Result<f64> {
+    let range: Vec<usize> = (0..=(args.end_midi - args.start_midi) as usize).collect();
+    let notes: Vec<u8> = pick_spread(&range, args.measure_notes as usize)
+        .iter()
+        .map(|&i| args.start_midi + i as u8)
+        .collect();
+    // Minimal single-note slots; build_chain_smf only reads `notes` and the index.
+    let meas_slots: Vec<Slot> = notes
+        .iter()
+        .enumerate()
+        .map(|(i, &m)| Slot {
+            slot: i as u8,
+            midi: m,
+            m8_note: midi_to_m8_note(m),
+            notes: vec![m],
+            label: midi_to_m8_note(m),
+            start_seconds: 0.0,
+            end_seconds: 0.0,
+        })
+        .collect();
+
+    let slot_ms = (args.max_slot_length * 1000.0).round() as u32;
+    let note_ms = (args.note_length * 1000.0).round() as u32;
+    let vels = vec![velocity; meas_slots.len()];
+    let smf = sfz::build_chain_smf(&meas_slots, slot_ms, note_ms, &vels);
+    let rendered = sfz::render_chain(engine, sfz, &smf, args.sample_rate)
+        .with_context(|| format!("measuring ring-out of {}", sfz.display()))?;
+
+    let sc = rendered.channels.max(1) as usize;
+    let fps = (args.max_slot_length * rendered.sample_rate as f64).round() as usize;
+    let mut longest = 0.0f64;
+    for i in 0..meas_slots.len() {
+        let start = (i * fps * sc).min(rendered.samples.len());
+        let end = ((i + 1) * fps * sc).min(rendered.samples.len());
+        let tail = last_sound_seconds(
+            &rendered.samples[start..end],
+            rendered.sample_rate,
+            rendered.channels,
+            args.decay_threshold,
+        );
+        longest = longest.max(tail);
+    }
+    Ok((longest + args.slot_margin).clamp(0.25, args.max_slot_length))
+}
+
+/// The distinct chains for one font at `slot_length`: the note chain (default or
+/// via `--notes`), an optional `--chord` slice=root chain, and the packed
+/// `--chords` files. Roots for packing are the whole rendered range (offline has
+/// no probe, so `--start/--end` bound the set).
+fn base_chains(args: &RenderSfzArgs, slot_length: f64) -> Vec<BaseChain> {
+    let mut chains = Vec::new();
+    let chords = args.resolved_chords();
+
+    if args.notes || (args.chord.is_none() && chords.is_empty()) {
+        chains.push(BaseChain {
+            slot_map: build_slot_map(args.start_midi, args.end_midi, slot_length, None),
+            tag: "notes".to_string(),
+            csv_default: false,
+        });
+    }
+    if let Some(q) = args.chord {
+        chains.push(BaseChain {
+            slot_map: build_slot_map(args.start_midi, args.end_midi, slot_length, Some(q)),
+            tag: q.short().to_string(),
+            csv_default: false,
+        });
+    }
+    if !chords.is_empty() {
+        let roots: Vec<u8> = (args.start_midi..=args.end_midi).collect();
+        for chunk in split_chord_files(roots.len(), &chords, args.max_slices, args.file_per_chord) {
+            let tag = chunk.iter().map(|q| q.short()).collect::<Vec<_>>().join("-");
+            chains.push(BaseChain {
+                slot_map: chord_slots(&roots, &chunk, slot_length),
+                tag,
+                csv_default: true,
+            });
+        }
+    }
+    chains
+}
+
+/// Assemble the job list: fonts x base chains x velocities x variations. Tags
+/// disambiguate filenames only along the axes actually varied.
+fn build_jobs(args: &RenderSfzArgs, velocities: &[u8], font_slot_lengths: &[f64]) -> Vec<Job> {
     let multi_font = args.sfz.len() > 1;
     let multi_vel = velocities.len() > 1;
     let multi_var = args.variations > 1;
 
     let mut jobs = Vec::new();
-    for sfz in &args.sfz {
+    for (fi, sfz) in args.sfz.iter().enumerate() {
+        let slot_length = font_slot_lengths[fi];
         let out_base = font_output_base(args, sfz, multi_font);
-        for &velocity in velocities {
-            for variation in 0..args.variations {
-                let vel_tag = if multi_vel { format!("_v{velocity}") } else { String::new() };
-                let take_tag = if multi_var {
-                    format!("_take{:02}", variation + 1)
-                } else {
-                    String::new()
-                };
-                let name = format!("{role}{vel_tag}{take_tag}");
-                let font = sfz
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "sfz".to_string());
-                jobs.push(Job {
-                    sfz: sfz.clone(),
-                    out_base: out_base.clone(),
-                    velocity,
-                    variation,
-                    label: format!("{font} / {name}"),
-                    name,
-                });
+        let font = font_stem(sfz);
+        for chain in base_chains(args, slot_length) {
+            for &velocity in velocities {
+                for variation in 0..args.variations {
+                    let vel_tag = if multi_vel { format!("_v{velocity}") } else { String::new() };
+                    let take_tag = if multi_var {
+                        format!("_take{:02}", variation + 1)
+                    } else {
+                        String::new()
+                    };
+                    let name = format!("{}{vel_tag}{take_tag}", chain.tag);
+                    jobs.push(Job {
+                        sfz: sfz.clone(),
+                        out_base: out_base.clone(),
+                        slot_map: chain.slot_map.clone(),
+                        slot_length,
+                        velocity,
+                        variation,
+                        csv_default: chain.csv_default,
+                        label: format!("{font} / {name}"),
+                        name,
+                    });
+                }
             }
         }
     }
@@ -175,45 +282,41 @@ fn build_jobs(args: &RenderSfzArgs, velocities: &[u8]) -> Vec<Job> {
 fn font_output_base(args: &RenderSfzArgs, sfz: &Path, multi_font: bool) -> PathBuf {
     match &args.output {
         Some(o) if !multi_font => o.clone(),
-        Some(o) => {
-            let stem = sfz
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "sfz".to_string());
-            o.with_file_name(format!("{stem}.wav"))
-        }
+        Some(o) => o.with_file_name(format!("{}.wav", font_stem(sfz))),
         None => sfz.with_extension("wav"),
     }
 }
 
+/// The file-stem of an `.sfz` path, for folder/label naming.
+fn font_stem(sfz: &Path) -> String {
+    sfz.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sfz".to_string())
+}
+
 /// Render one job end to end: author the SMF, run the engine, slice + finalize
 /// every slot, normalize, and write the WAV (plus opt-in sidecars).
-fn render_job(
-    job: &Job,
-    engine: &Path,
-    args: &RenderSfzArgs,
-    slots: &[Slot],
-    jitter: u8,
-) -> Result<JobOutput> {
-    let slot_ms = (args.slot_length * 1000.0).round() as u32;
+fn render_job(job: &Job, engine: &Path, args: &RenderSfzArgs) -> Result<JobOutput> {
+    let slot_ms = (job.slot_length * 1000.0).round() as u32;
     let note_ms = (args.note_length * 1000.0).round() as u32;
-    let velocities = slot_velocities(slots.len(), job.velocity, jitter, job.variation);
+    let velocities = slot_velocities(job.slot_map.len(), job.velocity, args.effective_jitter(), job.variation);
 
-    let smf = sfz::build_chain_smf(slots, slot_ms, note_ms, &velocities);
+    let smf = sfz::build_chain_smf(&job.slot_map, slot_ms, note_ms, &velocities);
     let rendered = sfz::render_chain(engine, &job.sfz, &smf, args.sample_rate)
         .with_context(|| format!("rendering {}", job.sfz.display()))?;
 
     let out_channels = args.channels.resolve(rendered.channels);
     let sc = rendered.channels.max(1) as usize;
-    let fps = (args.slot_length * rendered.sample_rate as f64).round() as usize;
+    let fps = (job.slot_length * rendered.sample_rate as f64).round() as usize;
     let fade_in_frames = (args.fade_in_ms as f64 * M8_SAMPLE_RATE as f64 / 1000.0) as usize;
     let fade_frames = (args.fade_ms as f64 * M8_SAMPLE_RATE as f64 / 1000.0) as usize;
 
-    let target_frames = (args.slot_length * M8_SAMPLE_RATE as f64).round() as usize;
-    let mut full: Vec<f32> = Vec::with_capacity(target_frames * out_channels as usize * slots.len());
-    let mut statuses: Vec<String> = Vec::with_capacity(slots.len());
+    let target_frames = (job.slot_length * M8_SAMPLE_RATE as f64).round() as usize;
+    let mut full: Vec<f32> =
+        Vec::with_capacity(target_frames * out_channels as usize * job.slot_map.len());
+    let mut statuses: Vec<String> = Vec::with_capacity(job.slot_map.len());
 
-    for i in 0..slots.len() {
+    for i in 0..job.slot_map.len() {
         let start = (i * fps * sc).min(rendered.samples.len());
         let end = ((i + 1) * fps * sc).min(rendered.samples.len());
         // Reuse the live path's finalizer: down-mix/expand, (identity) resample to
@@ -224,7 +327,7 @@ fn render_job(
             rendered.sample_rate,
             rendered.channels,
             out_channels,
-            args.slot_length,
+            job.slot_length,
             0.0,
             0,
         );
@@ -239,19 +342,20 @@ fn render_job(
         audio::normalize_peak(&mut full, dbfs_to_amp(args.normalize_dbfs));
     }
 
-    write_job_outputs(job, args, slots, &full, &statuses, out_channels)
+    write_job_outputs(job, args, &full, &statuses, out_channels)
 }
 
 /// Write a job's WAV(s) and opt-in sidecars, returning the paths and a summary.
 fn write_job_outputs(
     job: &Job,
     args: &RenderSfzArgs,
-    slots: &[Slot],
     full: &[f32],
     statuses: &[String],
     out_channels: u16,
 ) -> Result<JobOutput> {
-    let slot_samples = (args.slot_length * M8_SAMPLE_RATE as f64).round() as usize * out_channels as usize;
+    let slot_samples =
+        (job.slot_length * M8_SAMPLE_RATE as f64).round() as usize * out_channels as usize;
+    let slots = job.slot_map.len();
     let mut written = Vec::new();
 
     let folder = output::render_dir(&job.out_base);
@@ -259,7 +363,7 @@ fn write_job_outputs(
         .with_context(|| format!("creating output folder {}", folder.display()))?;
 
     let padded_path =
-        output::output_wav_path(&job.out_base, &job.name, slots.len(), args.note_length, false);
+        output::output_wav_path(&job.out_base, &job.name, slots, args.note_length, false);
     wav::write_wav(&padded_path, full, M8_SAMPLE_RATE, out_channels)?;
     written.push(padded_path.clone());
 
@@ -267,8 +371,7 @@ fn write_job_outputs(
         && let Some((f, l)) = rendered_bounds(statuses)
     {
         let trimmed = l - f + 1;
-        let path =
-            output::output_wav_path(&job.out_base, &job.name, trimmed, args.note_length, true);
+        let path = output::output_wav_path(&job.out_base, &job.name, trimmed, args.note_length, true);
         wav::write_wav(
             &path,
             &full[f * slot_samples..(l + 1) * slot_samples],
@@ -279,22 +382,23 @@ fn write_job_outputs(
     }
 
     let (csv_path, json_path) = output::sidecar_paths(&padded_path);
-    if args.csv {
-        output::write_csv_map(&csv_path, slots, job.velocity, statuses)?;
+    if args.csv || job.csv_default {
+        output::write_csv_map(&csv_path, &job.slot_map, job.velocity, statuses)?;
         written.push(csv_path.clone());
     }
     if args.json {
-        let config = build_config(job, args, slots.len() as u32, out_channels, &padded_path, &csv_path);
+        let config = build_config(job, args, out_channels, &padded_path, &csv_path);
         output::write_json_config(&json_path, &config)?;
         written.push(json_path);
     }
 
-    let slice_hex = format!("{:02X}", slots.len());
+    let slice_hex = format!("{slots:02X}");
     let layout = if out_channels == 1 { "mono" } else { "stereo" };
     let summary = format!(
-        "{} -> {} ({layout}, SLICE={slice_hex})",
+        "{} -> {} ({layout}, {:.2}s slots, SLICE={slice_hex})",
         job.label,
-        padded_path.display()
+        padded_path.display(),
+        job.slot_length,
     );
     Ok(JobOutput { written, summary })
 }
@@ -303,7 +407,6 @@ fn write_job_outputs(
 fn build_config(
     job: &Job,
     args: &RenderSfzArgs,
-    slice_count: u32,
     out_channels: u16,
     wav_path: &Path,
     csv_path: &Path,
@@ -313,6 +416,7 @@ fn build_config(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default()
     };
+    let slice_count = job.slot_map.len() as u32;
     let slice_hex = format!("{slice_count:02X}");
     RenderConfig {
         mode: "sfz-render".to_string(),
@@ -335,11 +439,12 @@ fn build_config(
         },
         render: RenderParams {
             note_length_seconds: args.note_length,
-            slot_length_seconds: args.slot_length,
+            slot_length_seconds: job.slot_length,
             pre_roll_ms: 0,
             slice_count,
             m8_slice_hex: slice_hex.clone(),
-            chord: args.chord.map(|q| q.short().to_string()),
+            chord: (job.csv_default || args.chord.is_some())
+                .then(|| job.name.clone()),
         },
         m8: M8Config {
             slice: slice_hex,
@@ -394,28 +499,35 @@ fn print_m8_hint() {
     println!("  Each slice maps to its slot (slot index = the note you press).");
 }
 
-fn print_plan(args: &RenderSfzArgs, slots: &[Slot], velocities: &[u8], jobs: &[Job]) {
+fn print_plan(args: &RenderSfzArgs, jobs: &[Job]) {
     println!("DRY RUN — the engine is not run\n");
     println!("  SFZ files   : {}", args.sfz.len());
     for p in &args.sfz {
         println!("    - {}", p.display());
     }
-    println!("  Engine      : {}", args
-        .sfizz_render
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "sfizz_render (from PATH)".to_string()));
     println!(
-        "  Notes range : {}..{} ({} slots)",
-        args.start_midi,
-        args.end_midi,
-        slots.len()
+        "  Engine      : {}",
+        args.sfizz_render
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "sfizz_render (from PATH)".to_string())
+    );
+    println!(
+        "  Notes range : {}..{}",
+        args.start_midi, args.end_midi
     );
     println!("  Note length : {}s", args.note_length);
-    println!("  Slot length : {}s", args.slot_length);
+    if args.auto_slot_length {
+        println!(
+            "  Slot length : auto (measured per font at runtime, max {}s)",
+            args.max_slot_length
+        );
+    } else {
+        println!("  Slot length : {}s", args.slot_length);
+    }
     println!(
         "  Velocities  : {}",
-        velocities.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
+        args.resolved_velocities().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
     );
     println!(
         "  Variations  : {} (velocity jitter +/-{})",
@@ -425,9 +537,19 @@ fn print_plan(args: &RenderSfzArgs, slots: &[Slot], velocities: &[u8], jobs: &[J
     if let Some(q) = args.chord {
         println!("  Chord       : {} (slice = root)", q.short());
     }
+    let chords = args.resolved_chords();
+    if !chords.is_empty() {
+        let qs = chords.iter().map(|q| q.short()).collect::<Vec<_>>().join(",");
+        if args.file_per_chord {
+            println!("  Chords      : [{qs}] one file per quality");
+        } else {
+            println!("  Chords      : [{qs}] packed into files of <= {} slices", args.max_slices);
+        }
+    }
     println!("\n  Output files ({}):", jobs.len());
     for job in jobs {
-        let path = output::output_wav_path(&job.out_base, &job.name, slots.len(), args.note_length, false);
+        let path =
+            output::output_wav_path(&job.out_base, &job.name, job.slot_map.len(), args.note_length, false);
         println!("    - {}", path.display());
     }
 }
@@ -435,12 +557,11 @@ fn print_plan(args: &RenderSfzArgs, slots: &[Slot], velocities: &[u8], jobs: &[J
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chords::ChordQuality;
 
     #[test]
     fn clean_take_uses_base_velocity() {
-        // Variation 0 is always flat at the base velocity.
         assert_eq!(slot_velocities(4, 100, 8, 0), vec![100, 100, 100, 100]);
-        // Zero jitter keeps every take flat too.
         assert_eq!(slot_velocities(3, 90, 0, 5), vec![90, 90, 90]);
     }
 
@@ -450,66 +571,97 @@ mod tests {
         let b = slot_velocities(16, 100, 8, 1);
         assert_eq!(a, b, "same seed -> identical take");
         assert!(a.iter().all(|&v| (92..=108).contains(&v)), "within +/-8 of 100");
-        // A different variation index yields a different sequence.
         let c = slot_velocities(16, 100, 8, 2);
         assert_ne!(a, c);
     }
 
     #[test]
     fn jitter_clamps_to_valid_velocity() {
-        // Base near the floor can't go below 1 (nor above 127).
         let v = slot_velocities(64, 3, 8, 1);
         assert!(v.iter().all(|&x| (1..=127).contains(&x)));
     }
 
     #[test]
-    fn build_jobs_products_all_axes() {
-        let mut args = base_args();
-        args.sfz = vec![PathBuf::from("a.sfz"), PathBuf::from("b.sfz")];
-        args.velocities = Some(vec![40, 80]);
-        args.variations = 2;
-        let vels = args.resolved_velocities();
-        let jobs = build_jobs(&args, &vels);
-        // 2 fonts x 2 velocities x 2 variations = 8 chains.
+    fn notes_chain_is_default_and_explicit() {
+        // Plain run: one notes chain.
+        let args = base_args();
+        assert_eq!(base_chain_tags(&args), vec!["notes"]);
+        // --notes alongside chords: notes + one packed file per fitting group.
+        let mut a = base_args();
+        a.chords = Some(vec![ChordQuality::Maj, ChordQuality::Min]);
+        a.notes = true;
+        let tags = base_chain_tags(&a);
+        assert_eq!(tags.first().map(String::as_str), Some("notes"));
+        assert!(tags.iter().any(|t| t.contains("maj")));
+    }
+
+    #[test]
+    fn chords_pack_and_file_per_chord() {
+        // 88 roots (21..108), 3 qualities, max 128 -> 1 quality/file -> 3 files.
+        let mut a = base_args();
+        a.chords = Some(vec![ChordQuality::Maj, ChordQuality::Min, ChordQuality::Dim]);
+        assert_eq!(base_chain_tags(&a), vec!["maj", "min", "dim"]);
+        // --file-per-chord forces one quality each regardless of budget.
+        a.file_per_chord = true;
+        assert_eq!(base_chain_tags(&a).len(), 3);
+    }
+
+    #[test]
+    fn build_jobs_multiplies_chains_by_velocity_and_variation() {
+        let mut a = base_args();
+        a.chords = Some(vec![ChordQuality::Maj, ChordQuality::Min]); // 2 chord files + no notes
+        a.velocities = Some(vec![40, 90]);
+        a.variations = 2;
+        let vels = a.resolved_velocities();
+        let jobs = build_jobs(&a, &vels, &[a.slot_length]);
+        // 2 base chains x 2 velocities x 2 variations = 8 jobs.
         assert_eq!(jobs.len(), 8);
-        // Names encode the varied axes; all are unique.
-        let mut names: Vec<_> = jobs.iter().map(|j| format!("{}|{}", j.sfz.display(), j.name)).collect();
-        names.sort();
-        names.dedup();
-        assert_eq!(names.len(), 8);
-        assert!(jobs.iter().any(|j| j.name == "notes_v40_take01"));
-        assert!(jobs.iter().any(|j| j.name == "notes_v80_take02"));
+        assert!(jobs.iter().any(|j| j.name == "maj_v40_take01"));
+        assert!(jobs.iter().any(|j| j.name == "min_v90_take02"));
+        // Chord jobs carry the CSV-by-default flag.
+        assert!(jobs.iter().all(|j| j.csv_default));
     }
 
     #[test]
     fn single_axis_names_stay_bare() {
-        let args = base_args();
-        let vels = args.resolved_velocities();
-        let jobs = build_jobs(&args, &vels);
+        let a = base_args();
+        let jobs = build_jobs(&a, &a.resolved_velocities(), &[a.slot_length]);
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].name, "notes");
     }
 
     #[test]
+    fn per_font_slot_length_flows_into_jobs() {
+        let mut a = base_args();
+        a.sfz = vec![PathBuf::from("a.sfz"), PathBuf::from("b.sfz")];
+        let jobs = build_jobs(&a, &a.resolved_velocities(), &[2.5, 7.0]);
+        let a_len = jobs.iter().find(|j| j.sfz.ends_with("a.sfz")).unwrap().slot_length;
+        let b_len = jobs.iter().find(|j| j.sfz.ends_with("b.sfz")).unwrap().slot_length;
+        assert_eq!((a_len, b_len), (2.5, 7.0));
+    }
+
+    #[test]
     fn font_output_base_layouts() {
         let mut args = base_args();
-        // Single font + explicit output: used verbatim.
         args.output = Some(PathBuf::from("out/Piano.wav"));
         assert_eq!(
             font_output_base(&args, Path::new("Piano.sfz"), false),
             PathBuf::from("out/Piano.wav")
         );
-        // Several fonts + output: one file per font under the output's parent.
         assert_eq!(
             font_output_base(&args, Path::new("some/dir/Rhodes.sfz"), true),
             PathBuf::from("out/Rhodes.wav")
         );
-        // No output: folder beside the .sfz named after it.
         args.output = None;
         assert_eq!(
             font_output_base(&args, Path::new("some/dir/Rhodes.sfz"), false),
             PathBuf::from("some/dir/Rhodes.wav")
         );
+    }
+
+    /// Tags of the base chains for a config (order-preserving).
+    fn base_chain_tags(args: &RenderSfzArgs) -> Vec<String> {
+        base_chains(args, 5.0).into_iter().map(|c| c.tag).collect()
     }
 
     fn base_args() -> RenderSfzArgs {
@@ -526,6 +678,15 @@ mod tests {
             start_midi: 21,
             end_midi: 108,
             chord: None,
+            chords: None,
+            file_per_chord: false,
+            max_slices: 128,
+            notes: false,
+            auto_slot_length: false,
+            max_slot_length: 20.0,
+            measure_notes: 8,
+            decay_threshold: 0.000125,
+            slot_margin: 0.7,
             variations: 1,
             velocity_jitter: None,
             fade_ms: 10,

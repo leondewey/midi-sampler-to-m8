@@ -403,8 +403,51 @@ pub struct RenderSfzArgs {
     pub end_midi: u8,
 
     /// Render a chord of this quality rooted at each note (slice = root).
+    /// Mutually exclusive with --chords.
     #[arg(long, value_enum)]
     pub chord: Option<ChordQuality>,
+
+    /// Render chord files for these qualities (comma-separated); pass with no
+    /// value for all qualities. Each quality keeps every root in range and is
+    /// packed into as many files as fit --max-slices. Mutually exclusive with
+    /// --chord.
+    #[arg(long, value_enum, value_delimiter = ',', num_args = 0..)]
+    pub chords: Option<Vec<ChordQuality>>,
+
+    /// With --chords, write one file per quality instead of packing several.
+    #[arg(long)]
+    pub file_per_chord: bool,
+
+    /// Slice budget per file for chord packing (the M8 fixed-slice count).
+    #[arg(long, default_value_t = 128)]
+    pub max_slices: usize,
+
+    /// Also render the plain single-note chain alongside any chord files.
+    /// (A run with no chord flags already produces it.)
+    #[arg(long)]
+    pub notes: bool,
+
+    /// Measure each font's ring-out and use it as the slot length (overrides
+    /// --slot-length). Pair with a short --note-length for snug slots.
+    #[arg(long)]
+    pub auto_slot_length: bool,
+
+    /// Upper bound (and measurement ceiling) for the auto slot length, seconds.
+    #[arg(long, default_value_t = 20.0)]
+    pub max_slot_length: f64,
+
+    /// How many notes to measure when auto-detecting the slot length.
+    #[arg(long, default_value_t = 8)]
+    pub measure_notes: u8,
+
+    /// Level below which a ring-out tail counts as silent, for auto slot length
+    /// (default ≈ -78 dBFS, so the full decay is captured).
+    #[arg(long, default_value_t = 0.000125)]
+    pub decay_threshold: f32,
+
+    /// Seconds of margin added after the measured tail, for auto slot length.
+    #[arg(long, default_value_t = 0.7)]
+    pub slot_margin: f64,
 
     /// Number of variation takes per chain (default 1). Takes beyond the first
     /// apply seeded per-note velocity jitter so each is a distinct render.
@@ -510,7 +553,52 @@ impl RenderSfzArgs {
         {
             bail!("--jobs must be at least 1");
         }
+        if self.auto_slot_length {
+            if self.max_slot_length <= 0.0 || self.max_slot_length.is_nan() {
+                bail!(
+                    "max-slot-length must be greater than 0 (got {})",
+                    self.max_slot_length
+                );
+            }
+            if self.measure_notes == 0 {
+                bail!("measure-notes must be at least 1");
+            }
+            if self.decay_threshold < 0.0 || self.decay_threshold.is_nan() {
+                bail!("decay-threshold must be >= 0 (got {})", self.decay_threshold);
+            }
+            if self.slot_margin < 0.0 || self.slot_margin.is_nan() {
+                bail!("slot-margin must be >= 0 (got {})", self.slot_margin);
+            }
+        }
+        if self.chord.is_some() && self.chords.is_some() {
+            bail!("use either --chord (one quality, slice = root) or --chords (packed), not both");
+        }
+        if self.file_per_chord && self.chords.is_none() {
+            bail!("--file-per-chord only applies with --chords");
+        }
+        if self.chords.is_some() {
+            if self.max_slices < 1 {
+                bail!("max-slices must be at least 1");
+            }
+            if self.max_slices > 255 {
+                bail!(
+                    "max-slices must be <= 255 (the M8 fixed-slice maximum); got {}",
+                    self.max_slices
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// The chord qualities to render for `--chords`: the given list, all
+    /// qualities when `--chords` was passed with no value, or empty when the
+    /// flag was not given at all.
+    pub fn resolved_chords(&self) -> Vec<ChordQuality> {
+        match &self.chords {
+            Some(v) if !v.is_empty() => v.clone(),
+            Some(_) => ChordQuality::ALL.to_vec(),
+            None => Vec::new(),
+        }
     }
 
     /// The velocities to render one chain each for: `--velocities` if given,
