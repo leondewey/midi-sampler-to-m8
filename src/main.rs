@@ -10,6 +10,8 @@ mod devices;
 mod notes;
 mod output;
 mod render;
+mod render_sfz;
+mod sfz;
 mod wav;
 
 use clap::Parser;
@@ -25,6 +27,7 @@ fn main() {
     let result = match cli.command {
         Command::ListDevices => devices::list_devices(),
         Command::Render(args) => render::run(&args),
+        Command::RenderSfz(args) => render_sfz::run(&args),
     };
 
     if let Err(err) = result {

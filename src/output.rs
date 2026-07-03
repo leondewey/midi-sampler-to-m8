@@ -78,33 +78,32 @@ pub fn sidecar_paths(wav: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     )
 }
 
-/// Build an output WAV path embedding an optional tag, the channel layout, the
-/// slot count, and the note length, e.g. `<stem>_mono_128slots_8s.wav`,
-/// `<stem>_maj_stereo_128slots_8s.wav`, or
-/// `<stem>_packed_stereo_21slots_8s_unpadded.wav`. A whole note length renders
-/// without a decimal (`8.0` -> `8s`, `8.5` -> `8.5s`).
-pub fn numbered_wav_path(
+/// Build an output WAV path inside a per-render folder named after the output
+/// stem, with a short name embedding the file's role, note length, and slot
+/// count. For `--output dir/Yamaha.wav`:
+/// `dir/Yamaha/notes_0.25s_128slots.wav`,
+/// `dir/Yamaha/maj-min_0.25s_122slots.wav`, or `..._unpadded.wav`.
+/// A whole note length renders without a decimal (`8.0` -> `8s`, `8.5` -> `8.5s`).
+pub fn output_wav_path(
     out: &Path,
-    tag: Option<&str>,
-    layout: &str,
+    name: &str,
     slots: usize,
     note_length: f64,
     unpadded: bool,
 ) -> PathBuf {
+    let folder = render_dir(out);
+    let suffix = if unpadded { "_unpadded" } else { "" };
+    folder.join(format!("{name}_{note_length}s_{slots}slots{suffix}.wav"))
+}
+
+/// The per-render output folder: `<parent>/<stem>/`.
+pub fn render_dir(out: &Path) -> PathBuf {
     let stem = out
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "output".to_string());
     let dir = out.parent().unwrap_or_else(|| Path::new("."));
-    let ext = out
-        .extension()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "wav".to_string());
-    let tag = tag.map(|t| format!("_{t}")).unwrap_or_default();
-    let suffix = if unpadded { "_unpadded" } else { "" };
-    dir.join(format!(
-        "{stem}{tag}_{layout}_{slots}slots_{note_length}s{suffix}.{ext}"
-    ))
+    dir.join(stem)
 }
 
 /// Derive the per-note test WAV path: `<stem>_testNN.wav`.
@@ -122,30 +121,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn numbered_wav_path_embeds_count_and_length() {
-        // Padded: full count, whole note length renders without a decimal.
+    fn output_wav_path_uses_folder_and_short_name() {
+        // Notes chain, whole note length renders without a decimal.
         assert_eq!(
-            numbered_wav_path(Path::new("dir/out.wav"), None, "mono", 128, 8.0, false),
-            PathBuf::from("dir/out_mono_128slots_8s.wav")
+            output_wav_path(Path::new("dir/Yamaha.wav"), "notes", 128, 0.25, false),
+            PathBuf::from("dir/Yamaha/notes_0.25s_128slots.wav")
         );
-        // Unpadded: trimmed count plus the `_unpadded` marker, stereo layout.
+        // Chord file with the `_unpadded` marker.
         assert_eq!(
-            numbered_wav_path(Path::new("dir/out.wav"), None, "stereo", 21, 8.0, true),
-            PathBuf::from("dir/out_stereo_21slots_8s_unpadded.wav")
+            output_wav_path(Path::new("dir/Yamaha.wav"), "maj-min", 122, 0.25, true),
+            PathBuf::from("dir/Yamaha/maj-min_0.25s_122slots_unpadded.wav")
         );
-        // Fractional note length keeps its decimal.
+        // No parent dir -> folder next to the cwd; whole seconds stay integer.
         assert_eq!(
-            numbered_wav_path(Path::new("out.wav"), None, "mono", 5, 8.5, false),
-            PathBuf::from("out_mono_5slots_8.5s.wav")
-        );
-        // A tag (chord quality / packed) is inserted after the stem, before the layout.
-        assert_eq!(
-            numbered_wav_path(Path::new("out.wav"), Some("maj"), "stereo", 128, 8.0, false),
-            PathBuf::from("out_maj_stereo_128slots_8s.wav")
-        );
-        assert_eq!(
-            numbered_wav_path(Path::new("out.wav"), Some("packed"), "stereo", 120, 8.0, true),
-            PathBuf::from("out_packed_stereo_120slots_8s_unpadded.wav")
+            output_wav_path(Path::new("out.wav"), "maj", 128, 8.0, false),
+            PathBuf::from("out/maj_8s_128slots.wav")
         );
     }
 }

@@ -137,8 +137,13 @@ where
 }
 
 /// Turn a captured interleaved native-rate buffer into a fixed-length output
-/// slot: down-mix/expand to `out_channels`, resample to 44.1 kHz, then force
-/// exactly `round(slot_length * 44100)` frames so every slot is identical-size.
+/// slot: down-mix/expand to `out_channels`, resample to 44.1 kHz, optionally trim
+/// the leading silence, then force exactly `round(slot_length * 44100)` frames so
+/// every slot is identical-size.
+///
+/// `onset_threshold` (in [0,1]) enables leading-silence trimming: everything
+/// before the first frame reaching that level, minus `lookback_frames`, is
+/// dropped (so the transient's leading edge is preserved). `0.0` disables it.
 ///
 /// Returns interleaved `f32` samples (`frames * out_channels` long).
 pub fn finalize_slot(
@@ -147,6 +152,8 @@ pub fn finalize_slot(
     native_channels: u16,
     out_channels: u16,
     slot_length: f64,
+    onset_threshold: f32,
+    lookback_frames: usize,
 ) -> Vec<f32> {
     let nch = native_channels.max(1) as usize;
     let frames = native.len() / nch;
@@ -177,14 +184,35 @@ pub fn finalize_slot(
     let target_frames = (slot_length * TARGET_RATE as f64).round() as usize;
     let oc = out_native.len();
 
-    let resampled: Vec<Vec<f32>> = out_native
+    // Resample each channel to the target rate (not yet length-fixed).
+    let mut resampled: Vec<Vec<f32>> = out_native
         .into_iter()
-        .map(|ch| {
-            let mut r = resample_linear(&ch, native_rate, TARGET_RATE);
-            r.resize(target_frames, 0.0); // pad or truncate to exact length
-            r
-        })
+        .map(|ch| resample_linear(&ch, native_rate, TARGET_RATE))
         .collect();
+
+    // Optional leading-silence trim: find the onset across channels and drop the
+    // frames before it (keeping `lookback_frames` so the transient stays intact).
+    if onset_threshold > 0.0 {
+        let len = resampled.iter().map(|c| c.len()).max().unwrap_or(0);
+        let onset = (0..len).find(|&f| {
+            resampled
+                .iter()
+                .any(|c| c.get(f).is_some_and(|s| s.abs() >= onset_threshold))
+        });
+        if let Some(o) = onset {
+            let start = o.saturating_sub(lookback_frames);
+            if start > 0 {
+                for c in resampled.iter_mut() {
+                    c.drain(0..start.min(c.len()));
+                }
+            }
+        }
+    }
+
+    // Force every channel to exactly `target_frames` (pad or truncate).
+    for c in resampled.iter_mut() {
+        c.resize(target_frames, 0.0);
+    }
 
     // Interleave.
     let mut out = vec![0.0f32; target_frames * oc];
@@ -214,6 +242,39 @@ pub fn apply_end_fade(samples: &mut [f32], channels: u16, fade_frames: usize) {
         for c in 0..ch {
             samples[frame * ch + c] *= gain;
         }
+    }
+}
+
+/// Apply a linear fade-in over the first `fade_frames` frames of an interleaved
+/// buffer, ramping the gain from 0.0 up to ~1.0. Removes the click that a trimmed
+/// slot would otherwise start with. No-op when `fade_frames` is 0.
+pub fn apply_start_fade(samples: &mut [f32], channels: u16, fade_frames: usize) {
+    let ch = channels.max(1) as usize;
+    let frames = samples.len() / ch;
+    let n = fade_frames.min(frames);
+    if n == 0 {
+        return;
+    }
+    for j in 0..n {
+        // gain 0.0 at the first frame, ~1.0 at the last faded frame.
+        let gain = j as f32 / (n - 1).max(1) as f32;
+        for c in 0..ch {
+            samples[j * ch + c] *= gain;
+        }
+    }
+}
+
+/// Scale an interleaved buffer so its loudest sample reaches `target_amp`
+/// (e.g. `0.891` for -1 dBFS). No-op if the buffer is essentially silent, so a
+/// quiet slot's noise floor is never blown up.
+pub fn normalize_peak(samples: &mut [f32], target_amp: f32) {
+    let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    if peak < 1e-6 {
+        return;
+    }
+    let gain = target_amp / peak;
+    for s in samples.iter_mut() {
+        *s *= gain;
     }
 }
 
@@ -266,14 +327,14 @@ mod tests {
     fn finalize_mono_produces_exact_length() {
         // 480 native frames, 2 channels, 48 kHz -> 0.01s slot at 44.1k = 441 frames.
         let native: Vec<f32> = (0..960).map(|_| 0.25).collect();
-        let out = finalize_slot(&native, 48000, 2, 1, 0.01);
+        let out = finalize_slot(&native, 48000, 2, 1, 0.01, 0.0, 0);
         assert_eq!(out.len(), 441); // mono => 1 sample per frame
     }
 
     #[test]
     fn finalize_stereo_produces_interleaved_exact_length() {
         let native: Vec<f32> = (0..960).map(|_| 0.25).collect();
-        let out = finalize_slot(&native, 48000, 2, 2, 0.01);
+        let out = finalize_slot(&native, 48000, 2, 2, 0.01, 0.0, 0);
         assert_eq!(out.len(), 441 * 2); // stereo interleaved
     }
 
@@ -307,8 +368,51 @@ mod tests {
     fn finalize_pads_short_capture_with_silence() {
         // Only 10 native frames but a 0.01s slot needs 441 -> padded with zeros.
         let native: Vec<f32> = vec![1.0; 10];
-        let out = finalize_slot(&native, 44100, 1, 1, 0.01);
+        let out = finalize_slot(&native, 44100, 1, 1, 0.01, 0.0, 0);
         assert_eq!(out.len(), 441);
         assert_eq!(out[440], 0.0);
+    }
+
+    #[test]
+    fn finalize_trims_leading_silence_with_lookback() {
+        // 44.1k mono: 100 silent frames, then a burst. 0.01s slot = 441 frames.
+        let mut native = vec![0.0f32; 100];
+        native.extend(std::iter::repeat_n(0.5f32, 50));
+        // Threshold below the burst, 10-frame lookback: onset at 100 -> start 90.
+        let out = finalize_slot(&native, 44100, 1, 1, 0.01, 0.1, 10);
+        assert_eq!(out.len(), 441); // still exact length
+        // First 10 frames are the retained lookback silence, then the burst.
+        assert_eq!(out[0], 0.0);
+        assert!((out[10] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn finalize_leaves_silent_slot_untouched() {
+        // All silence: nothing crosses the threshold, so no trim, still padded.
+        let native = vec![0.0f32; 200];
+        let out = finalize_slot(&native, 44100, 1, 1, 0.01, 0.1, 10);
+        assert_eq!(out.len(), 441);
+        assert!(out.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn start_fade_ramps_from_zero() {
+        let mut buf = vec![1.0f32; 8];
+        apply_start_fade(&mut buf, 1, 4);
+        assert_eq!(buf[0], 0.0); // first frame fully faded in
+        assert!(buf[1] < buf[2] && buf[2] < buf[3]); // ascending
+        assert_eq!(buf[4..], [1.0, 1.0, 1.0, 1.0]); // untouched after the fade
+    }
+
+    #[test]
+    fn normalize_scales_to_target_and_skips_silence() {
+        let mut buf = vec![0.2f32, -0.1, 0.05];
+        normalize_peak(&mut buf, 0.891);
+        let peak = buf.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!((peak - 0.891).abs() < 1e-6);
+        // Near-silent buffer is left alone (no noise blow-up).
+        let mut quiet = vec![1e-8f32, -1e-8];
+        normalize_peak(&mut quiet, 0.891);
+        assert_eq!(quiet, vec![1e-8f32, -1e-8]);
     }
 }

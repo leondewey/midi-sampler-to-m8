@@ -33,10 +33,10 @@ fn render_dry_run_prints_plan_without_devices() {
         .assert()
         .success()
         .stdout(predicate::str::contains("DRY RUN"))
-        .stdout(predicate::str::contains("128 slots"))
-        // Filename embeds the layout, slot count, and note length ("auto" until a
-        // device resolves it at runtime).
-        .stdout(predicate::str::contains("plan_auto_128slots_1s.wav"));
+        .stdout(predicate::str::contains("128 notes"))
+        // Outputs land in a per-name folder with a short name embedding the note
+        // length and slot count.
+        .stdout(predicate::str::contains("plan/notes_1s_128slots.wav"));
 }
 
 #[test]
@@ -110,6 +110,62 @@ fn non_44100_sample_rate_fails() {
             "0",
             "--output",
             "x.wav",
+            "--sample-rate",
+            "48000",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("44100"));
+}
+
+#[test]
+fn render_sfz_dry_run_prints_plan_without_engine() {
+    // The .sfz need not exist for a dry run — the engine is never invoked.
+    bin()
+        .args([
+            "render-sfz",
+            "--sfz",
+            "Piano.sfz",
+            "--start-midi",
+            "60",
+            "--end-midi",
+            "72",
+            "--slot-length",
+            "2",
+            "--note-length",
+            "1",
+            "--velocities",
+            "40,90",
+            "--variations",
+            "2",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"))
+        .stdout(predicate::str::contains("13 slots"))
+        // 1 font x 2 velocities x 2 variations = 4 chains, tagged by axis.
+        .stdout(predicate::str::contains("Output files (4)"))
+        .stdout(predicate::str::contains("notes_v40_take01_1s_13slots.wav"));
+}
+
+#[test]
+fn render_sfz_rejects_non_sfz_file() {
+    bin()
+        .args(["render-sfz", "--sfz", "instrument.sf2", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(".sfz"));
+}
+
+#[test]
+fn render_sfz_non_44100_sample_rate_fails() {
+    bin()
+        .args([
+            "render-sfz",
+            "--sfz",
+            "Piano.sfz",
             "--sample-rate",
             "48000",
             "--dry-run",

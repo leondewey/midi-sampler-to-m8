@@ -31,6 +31,21 @@ pub enum ChordQuality {
 }
 
 impl ChordQuality {
+    /// Every built-in quality, in declaration order. Used when `--chords` is given
+    /// with no value ("all qualities").
+    pub const ALL: [ChordQuality; 10] = [
+        ChordQuality::Maj,
+        ChordQuality::Min,
+        ChordQuality::Dim,
+        ChordQuality::Aug,
+        ChordQuality::Maj7,
+        ChordQuality::Min7,
+        ChordQuality::Dom7,
+        ChordQuality::Sus2,
+        ChordQuality::Sus4,
+        ChordQuality::Power,
+    ];
+
     /// Semitone offsets from the root that make up the chord.
     pub fn intervals(self) -> &'static [i8] {
         match self {
