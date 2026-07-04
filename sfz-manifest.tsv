@@ -1,0 +1,184 @@
+# process	chords	output_rel	sfz_path
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_bass1.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_bass1.5db.sfz
+y	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_flat.Recommended.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_treble0.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_treble1.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_treble1.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_treble2.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_daw/Accurate-SalamanderGrandPiano_treble2.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_bass1.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_bass1.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_flat.Recommended.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_treble0.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_treble1.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_treble1.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_treble2.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_live/Accurate-SalamanderGrandPiano_treble2.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_bass1.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_bass1.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_flat.Recommended.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_treble0.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_treble1.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_treble1.5db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_treble2.0db.sfz
+n	y	Salamander Grand Piano	/Volumes/Expansion/music/sfz/AccurateSalamanderGrandPianoV6.2beta2_48khz24bit/sfz_minimum/Accurate-SalamanderGrandPiano_treble2.5db.sfz
+y	y	Americana Tapestries/Fiddle For Airports	/Volumes/Expansion/music/sfz/Americana Tapestries/Fiddle For Airports.sfz
+# unsupported: sfizz_render SIGSEGV (partial library, missing samples)
+n	y	Americana Tapestries/Tapestry Strings	/Volumes/Expansion/music/sfz/Americana Tapestries/Tapestry Strings.sfz
+y	y	Antz.0/Fields Of Ash	/Volumes/Expansion/music/sfz/Antz.0/Fields Of Ash.sfz
+y	y	Antz.0/Garden Tape	/Volumes/Expansion/music/sfz/Antz.0/Garden Tape.sfz
+y	y	Antz.0/Grainy Memory	/Volumes/Expansion/music/sfz/Antz.0/Grainy Memory.sfz
+y	y	Antz.0/Great Western Pains	/Volumes/Expansion/music/sfz/Antz.0/Great Western Pains.sfz
+y	y	Antz.0/Lynch Airconditioner	/Volumes/Expansion/music/sfz/Antz.0/Lynch Airconditioner.sfz
+y	y	Antz.0/Neon Erosion	/Volumes/Expansion/music/sfz/Antz.0/Neon Erosion.sfz
+y	y	Antz.0/Pacific North West	/Volumes/Expansion/music/sfz/Antz.0/Pacific North West.sfz
+y	y	Antz.0/Rip Chord	/Volumes/Expansion/music/sfz/Antz.0/Rip Chord.sfz
+y	y	Antz.0/Space Mirage	/Volumes/Expansion/music/sfz/Antz.0/Space Mirage.sfz
+y	y	Antz.0/The Backroom	/Volumes/Expansion/music/sfz/Antz.0/The Backroom.sfz
+y	y	Archive Found Strings	/Volumes/Expansion/music/sfz/Archive Found Strings/Archive Found Strings 001.sfz
+y	y	Arctic Pad	/Volumes/Expansion/music/sfz/Arctic Pad/Arctic Pad.sfz
+y	y	arnLofiChorus	/Volumes/Expansion/music/sfz/arnLofiChorus/lofi-chorus.sfz
+y	y	Baby Grand Piano	/Volumes/Expansion/music/sfz/Baby Grand Piano/Baby Grand Piano.sfz
+y	n	Body Percussion	/Volumes/Expansion/music/sfz/Body Percussion/Body Percussion.sfz
+y	n	Cassette Drums	/Volumes/Expansion/music/sfz/Cassette Drums/Cassette Drums.sfz
+y	y	Claustrophobic Piano/KU100	/Volumes/Expansion/music/sfz/Claustrophobic Piano/Claustrophobic Piano (KU100).sfz
+y	y	Claustrophobic Piano/M149	/Volumes/Expansion/music/sfz/Claustrophobic Piano/Claustrophobic Piano (M149).sfz
+y	y	Claustrophobic Piano/MIX456	/Volumes/Expansion/music/sfz/Claustrophobic Piano/Claustrophobic Piano (MIX456).sfz
+y	y	Corrosion/Ashes Fallout	/Volumes/Expansion/music/sfz/Corrosion/Ashes Fallout MW.sfz
+y	y	Corrosion/Burnt Forest	/Volumes/Expansion/music/sfz/Corrosion/Burnt Forest MW.sfz
+y	y	Corrosion/Empty Ruins	/Volumes/Expansion/music/sfz/Corrosion/Empty Ruins MW.sfz
+y	y	Corrosion/Infinite Two	/Volumes/Expansion/music/sfz/Corrosion/Infinite Two MW.sfz
+y	y	Corrosion/Like Poetry	/Volumes/Expansion/music/sfz/Corrosion/Like Poetry MW.sfz
+y	y	Corrosion/Oxyded Synth	/Volumes/Expansion/music/sfz/Corrosion/Oxyded Synth MW.sfz
+y	y	Corrosion/Short Pipe	/Volumes/Expansion/music/sfz/Corrosion/Short Pipe MW.sfz
+y	y	Corrosion/Widescreen Apocalypse	/Volumes/Expansion/music/sfz/Corrosion/Widescreen Apocalypse MW.sfz
+y	n	Cymbal Swells	/Volumes/Expansion/music/sfz/Cymbal Swells/Cymball Swells.sfz
+y	y	Dictaphone Orchestra/Clarinet	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Clarinet.sfz
+y	y	Dictaphone Orchestra/Kalimba	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Kalimba.sfz
+y	y	Dictaphone Orchestra/Rajao	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Rajao.sfz
+y	y	Dictaphone Orchestra/Toy Piano	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Toy Piano.sfz
+y	y	Dictaphone Orchestra/Trumpet	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Trumpet.sfz
+y	y	Dictaphone Orchestra/Violin Bows	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Violin Bows.sfz
+y	y	Dictaphone Orchestra/Violin Plucks	/Volumes/Expansion/music/sfz/Dictaphone Orchestra/Dictaphone Violin Plucks.sfz
+# unsupported: sfizz_render SIGSEGV (partial library, missing samples)
+n	y	DK Solo Cello	/Volumes/Expansion/music/sfz/DK Solo Cello/DK Solo Cello Spurs.sfz
+y	y	Eiersheimer Orgel	/Volumes/Expansion/music/sfz/Eiersheimer Orgel/Eiersheimer Orgel.sfz
+y	y	Flute and Violin/Sustain FX	/Volumes/Expansion/music/sfz/Flute and Violin/Flute+violin Sustain FX.sfz
+y	y	Flute and Violin/Waves	/Volumes/Expansion/music/sfz/Flute and Violin/Flute+violin waves.sfz
+y	y	Grand Studio A	/Volumes/Expansion/music/sfz/Grand Studio A/Grand Studio A.sfz
+y	y	Home Piano/Felt	/Volumes/Expansion/music/sfz/Home Piano /Home Piano Felt.sfz
+y	y	Home Piano/Default	/Volumes/Expansion/music/sfz/Home Piano /Home Piano.sfz
+y	n	Italian Typewriter	/Volumes/Expansion/music/sfz/Italian Typewriter/Italian Typewriter.sfz
+y	y	Piano in 162/Ambient	/Volumes/Expansion/music/sfz/Ivy Audio - Piano in 162 sfz/IvyAudio-PianoIn162-Ambient.sfz
+y	y	Piano in 162/Close	/Volumes/Expansion/music/sfz/Ivy Audio - Piano in 162 sfz/IvyAudio-PianoIn162-Close.sfz
+y	y	Matt's Fender Rhodes	/Volumes/Expansion/music/sfz/Matt's Fender Rhodes /Matt_s Fender Rhodes.sfz
+y	y	Micromoog/Raw material	/Volumes/Expansion/music/sfz/Micromoog/a_Micromoog (raw material).sfz
+y	y	Micromoog/Stereo organ	/Volumes/Expansion/music/sfz/Micromoog/b_Micromoog_stereo_organ.sfz
+y	y	Micromoog/Piano	/Volumes/Expansion/music/sfz/Micromoog/c_Micromoog_piano.sfz
+y	y	Micromoog/Legato	/Volumes/Expansion/music/sfz/Micromoog/d_Micromoog Legato.sfz
+y	y	Micromoog/Singing Ghost	/Volumes/Expansion/music/sfz/Micromoog/e_Micromoog Singing Ghost.sfz
+y	y	Mother Of Lows/Analog Pluck Bass	/Volumes/Expansion/music/sfz/Mother Of Lows/Analog Pluck Bass.sfz
+y	y	Mother Of Lows/Analog Reso Bass	/Volumes/Expansion/music/sfz/Mother Of Lows/Analog Reso Bass.sfz
+y	y	Mother Of Lows/Dark Low Synth	/Volumes/Expansion/music/sfz/Mother Of Lows/Dark Low Synth.sfz
+y	y	Mother Of Lows/Double Mother	/Volumes/Expansion/music/sfz/Mother Of Lows/Double Mother.sfz
+y	y	Mother Of Lows/Moog Bass 4 Seq	/Volumes/Expansion/music/sfz/Mother Of Lows/Moog Bass 4 Seq.sfz
+y	y	Mother Of Lows/Moog Sub	/Volumes/Expansion/music/sfz/Mother Of Lows/Moog Sub.sfz
+y	y	Mother Of Lows/Mother Bass Reso	/Volumes/Expansion/music/sfz/Mother Of Lows/Mother Bass Reso.sfz
+y	y	Mother Of Lows/Step Mother	/Volumes/Expansion/music/sfz/Mother Of Lows/Step Mother.sfz
+y	y	Music Box/pitch corrected	/Volumes/Expansion/music/sfz/Music Box/Music Box pitch corrected.sfz
+y	y	Music Box/default	/Volumes/Expansion/music/sfz/Music Box/Music Box.sfz
+y	y	Nasa Space Pad	/Volumes/Expansion/music/sfz/Nasa Space Pad/Nasa Space Pad.sfz
+y	y	November Piano	/Volumes/Expansion/music/sfz/November Piano/November Piano.sfz
+y	y	Reissue Stratocaster 62	/Volumes/Expansion/music/sfz/Reissue Stratocaster 62/62 Reissue Stratocaster.sfz
+y	y	RJS LoFi Nylon/Monophonic	/Volumes/Expansion/music/sfz/RJS LoFi Nylon/RJS LoFi Nylon (DS) Monophonic.sfz
+y	y	RJS LoFi Nylon/Default	/Volumes/Expansion/music/sfz/RJS LoFi Nylon/RJS LoFi Nylon (DS).sfz
+y	y	Sanctum/Sanctum Designer	/Volumes/Expansion/music/sfz/Sanctum/1 - Sanctum Designer.sfz
+y	y	Sanctum/Dust	/Volumes/Expansion/music/sfz/Sanctum/10 - Dust.sfz
+y	y	Sanctum/Dystopia	/Volumes/Expansion/music/sfz/Sanctum/11 - Dystopia.sfz
+y	y	Sanctum/Luma	/Volumes/Expansion/music/sfz/Sanctum/12 - Luma.sfz
+y	y	Sanctum/Motior	/Volumes/Expansion/music/sfz/Sanctum/13 - Motior.sfz
+y	y	Sanctum/Part	/Volumes/Expansion/music/sfz/Sanctum/14 - Part.sfz
+y	y	Sanctum/Horn	/Volumes/Expansion/music/sfz/Sanctum/15 - Horn.sfz
+y	y	Sanctum/Awake	/Volumes/Expansion/music/sfz/Sanctum/2- Awake.sfz
+y	y	Sanctum/Decay	/Volumes/Expansion/music/sfz/Sanctum/3- Decay.sfz
+y	y	Sanctum/Triple	/Volumes/Expansion/music/sfz/Sanctum/4- Triple.sfz
+y	y	Sanctum/Temple	/Volumes/Expansion/music/sfz/Sanctum/5 - Temple.sfz
+y	y	Sanctum/Moon	/Volumes/Expansion/music/sfz/Sanctum/6- Moon.sfz
+y	y	Sanctum/Mars	/Volumes/Expansion/music/sfz/Sanctum/7 - Mars.sfz
+y	y	Sanctum/Roots	/Volumes/Expansion/music/sfz/Sanctum/8 - Roots.sfz
+y	y	Sanctum/Piano Pad	/Volumes/Expansion/music/sfz/Sanctum/9 - Piano Pad.sfz
+y	y	Soft String Spurs/Core	/Volumes/Expansion/music/sfz/Soft String Spurs/SSS Core.sfz
+y	y	Soft String Spurs/Harmonics	/Volumes/Expansion/music/sfz/Soft String Spurs/SSS Harmonics.sfz
+y	y	Soft String Spurs/Swells Multi	/Volumes/Expansion/music/sfz/Soft String Spurs/SSS Swells Multi.sfz
+y	y	Soft String Spurs/Swells	/Volumes/Expansion/music/sfz/Soft String Spurs/SSS Swells.sfz
+y	y	String Quartet	/Volumes/Expansion/music/sfz/String Quartet/SQ.sfz
+y	y	Studio One/Composers Elements	/Volumes/Expansion/music/sfz/Studio One/Studio One - Composer_s Elements.sfz
+y	y	Studio One/Studio One	/Volumes/Expansion/music/sfz/Studio One/Studio One.sfz
+y	y	Synth Drone	/Volumes/Expansion/music/sfz/Synth Drone/Synth Drone.sfz
+y	y	The Bjarma Grand	/Volumes/Expansion/music/sfz/The Bjarma Grand /The Bjarma Grand.sfz
+y	y	The Experience Yamaha/Ambisoni	/Volumes/Expansion/music/sfz/The Experience Yamaha S6 V1.3/The Experience Yamaha S6 Ambisonic V1_2.sfz
+y	y	The Experience Yamaha/Performance	/Volumes/Expansion/music/sfz/The Experience Yamaha S6 V1.3/The Experience Yamaha S6 Performance V1_2.sfz
+y	y	The Kings Upright	/Volumes/Expansion/music/sfz/The King's Upright/The King_s Upright.sfz
+y	y	The Synths/2010 House	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS 2010 House.sfz
+y	y	The Synths/Another Analog Bass	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS Another Analog Bass.sfz
+y	y	The Synths/Corg Bass	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS Corg Bass.sfz
+y	y	The Synths/Deep Undertone	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS Deep Undertone.sfz
+y	y	The Synths/Lead Bass Player	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS Lead Bass Player.sfz
+y	y	The Synths/ms20 Bass	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS ms20 Bass.sfz
+y	y	The Synths/Outrun Bass	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS Outrun Bass.sfz
+y	y	The Synths/Thick Bass	/Volumes/Expansion/music/sfz/The Synths/The Synths - BS Thick Bass.sfz
+y	y	The Synths/DX Epiano	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB DX Epiano.sfz
+y	y	The Synths/Interstellar On A Budget	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB Interstellar On A Budget.sfz
+y	y	The Synths/Nord String	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB Nord String.sfz
+y	y	The Synths/Outrun Pluck	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB Outrun Pluck.sfz
+y	y	The Synths/Rhode Less Traveled	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB Rhode Less Traveled.sfz
+y	y	The Synths/Synthetic Organ	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB Synthetic Organ.sfz
+y	y	The Synths/Synthetic Strings	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB Synthetic Strings.sfz
+y	y	The Synths/The Organ Trail	/Volumes/Expansion/music/sfz/The Synths/The Synths - KB The Organ Trail.sfz
+y	y	The Synths/Classic Saws	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Classic Saws.sfz
+y	y	The Synths/Crystaline 80s	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Crystaline 80s.sfz
+y	y	The Synths/CS80-Ish	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD CS80-Ish.sfz
+y	y	The Synths/FM Hard Lead	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD FM Hard Lead.sfz
+y	y	The Synths/For Each Loop	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD For Each Loop.sfz
+y	y	The Synths/Forever 80s	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Forever 80s.sfz
+y	y	The Synths/French House	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD French House.sfz
+y	y	The Synths/Imfamousoty	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Imfamousoty.sfz
+y	y	The Synths/Jp PatchLead	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Jp PatchLead.sfz
+y	y	The Synths/Juno Was Is	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Juno Was Is.sfz
+y	y	The Synths/Legecy Lead	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Legecy Lead.sfz
+y	y	The Synths/PopTab	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD PopTab.sfz
+y	y	The Synths/Strangest Things	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Strangest Things.sfz
+y	y	The Synths/Synthetic Brass	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Synthetic Brass.sfz
+y	y	The Synths/The Nord	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD The Nord.sfz
+y	y	The Synths/Guitar Chug	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD The Stack Guitar Chug.sfz
+y	y	The Synths/Guitar	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD The Stack Guitar.sfz
+y	y	The Synths/Uberheim Legend	/Volumes/Expansion/music/sfz/The Synths/The Synths - LD Uberheim Legend.sfz
+y	y	The Synths/Airlock Leak	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Airlock Leak.sfz
+y	y	The Synths/Event Horizon	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Event Horizon.sfz
+y	y	The Synths/Every 80s Movie Ever	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Every 80s Movie Ever.sfz
+y	y	The Synths/Fatness Pad	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Fatness Pad.sfz
+y	y	The Synths/On The Horizon	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD On The Horizon.sfz
+y	y	The Synths/Orion Belt	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Orion Belt.sfz
+y	y	The Synths/Soft And Padded	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Soft And Padded.sfz
+y	y	The Synths/The First Pad	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD The First Pad.sfz
+y	y	The Synths/Timeless Movement	/Volumes/Expansion/music/sfz/The Synths/The Synths - PD Timeless Movement.sfz
+y	y	The Synths/Rhythmic Seq 1	/Volumes/Expansion/music/sfz/The Synths/The Synths - SQ Rhythmic Seq 1 (100bpm).sfz
+y	y	The Synths/Rhythmic Seq 2	/Volumes/Expansion/music/sfz/The Synths/The Synths - SQ Rhythmic Seq 2 (100bpm).sfz
+y	n	Vinyl Scratcher Lite	/Volumes/Expansion/music/sfz/Vinyl Scratcher Lite/Vinyl Scratcher Lite.sfz
+y	y	Cosmic Clones	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/BA - Cosmic Clones.sfz
+y	y	Ghoul	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/BA - Ghoul.sfz
+y	y	Dantes Pluck	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/KY - Dante_s Pluck.sfz
+y	y	Glassic	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/KY - Glassic.sfz
+y	y	Malls of Ontario	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/KY - Malls of Ontario.sfz
+y	y	Analog Kingdom	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/LD - Analog Kingdom.sfz
+y	y	Arnolds Dream	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/LD - Arnold_s Dream.sfz
+y	y	Portaflute	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/LD - Portaflute.sfz
+y	y	Abandoned Android	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/PD - Abandoned Android.sfz
+y	y	CRT	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/PD - CRT.sfz
+y	y	Databank Strings	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/PD - Databank Strings.sfz
+y	y	Kowloon Night Market	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/PD - Kowloon Night Market.sfz
+y	y	Timewarps	/Volumes/Expansion/music/sfz/VT + DS - Interlaced Free Edition/PD - Timewarps.sfz
+y	y	Yamaha C2MVP	/Volumes/Expansion/music/sfz/Yamaha C2MVP/YC2 MVP P1 Basic.sfz
+y	y	Yamaha Grand Palm Mute	/Volumes/Expansion/music/sfz/Yamaha Grand Palm Mute/Yamaha Grand Palm Mute.sfz
+y	y	Yamaha Palm Mute	/Volumes/Expansion/music/sfz/Yamaha Palm Mute/Yamaha Grand Palm Mute.sfz
