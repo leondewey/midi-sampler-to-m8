@@ -83,31 +83,69 @@ pub fn build_chain_smf(slots: &[Slot], slot_ms: u32, note_len_ms: u32, velocitie
         let off_tick = (on_tick + note_len_ms).min(total_ms);
         let vel = velocities.get(i).copied().unwrap_or(100);
         for &note in &slot.notes {
-            events.push((
-                on_tick,
-                1,
-                TrackEventKind::Midi {
-                    channel: u4::from_int_lossy(0),
-                    message: MidiMessage::NoteOn {
-                        key: u7::from_int_lossy(note),
-                        vel: u7::from_int_lossy(vel),
-                    },
-                },
-            ));
-            events.push((
-                off_tick,
-                0,
-                TrackEventKind::Midi {
-                    channel: u4::from_int_lossy(0),
-                    message: MidiMessage::NoteOff {
-                        key: u7::from_int_lossy(note),
-                        vel: u7::from_int_lossy(0),
-                    },
-                },
-            ));
+            push_note(&mut events, on_tick, off_tick, note, vel);
         }
     }
 
+    smf_from_events(events, total_ms)
+}
+
+/// Author a free-form phrase: each hit sounds its notes at `start_ms`, held for
+/// `dur_ms`, at velocity `vel`. Used for the short audition demo. The track ends
+/// at `total_ms` (rendered with `--use-eot`), so the WAV spans exactly that long.
+pub fn build_phrase_smf(hits: &[(u32, u32, Vec<u8>, u8)], total_ms: u32) -> Vec<u8> {
+    let mut events: Vec<(u32, u8, TrackEventKind<'static>)> = Vec::new();
+    events.push((
+        0,
+        0,
+        TrackEventKind::Meta(MetaMessage::Tempo(u24::from_int_lossy(TEMPO_US_PER_QUARTER))),
+    ));
+    for (start_ms, dur_ms, notes, vel) in hits {
+        let off = (start_ms + dur_ms).min(total_ms);
+        for &note in notes {
+            push_note(&mut events, *start_ms, off, note, *vel);
+        }
+    }
+    smf_from_events(events, total_ms)
+}
+
+/// Push a note-on/note-off pair for `note` at `on_tick`/`off_tick`. `order` keeps
+/// offs (0) ahead of ons (1) when they land on the same tick.
+fn push_note(
+    events: &mut Vec<(u32, u8, TrackEventKind<'static>)>,
+    on_tick: u32,
+    off_tick: u32,
+    note: u8,
+    vel: u8,
+) {
+    events.push((
+        on_tick,
+        1,
+        TrackEventKind::Midi {
+            channel: u4::from_int_lossy(0),
+            message: MidiMessage::NoteOn {
+                key: u7::from_int_lossy(note),
+                vel: u7::from_int_lossy(vel),
+            },
+        },
+    ));
+    events.push((
+        off_tick,
+        0,
+        TrackEventKind::Midi {
+            channel: u4::from_int_lossy(0),
+            message: MidiMessage::NoteOff {
+                key: u7::from_int_lossy(note),
+                vel: u7::from_int_lossy(0),
+            },
+        },
+    ));
+}
+
+/// Turn absolute-timed events into a single-track SMF: stable-sort by
+/// `(tick, order)`, convert to delta times, and cap with `EndOfTrack` at
+/// `total_ms`.
+fn smf_from_events(mut events: Vec<(u32, u8, TrackEventKind<'static>)>, total_ms: u32) -> Vec<u8> {
     // Stable sort by (tick, order) so simultaneous offs precede ons.
     events.sort_by_key(|(tick, order, _)| (*tick, *order));
 
@@ -121,9 +159,9 @@ pub fn build_chain_smf(slots: &[Slot], slot_ms: u32, note_len_ms: u32, velocitie
             kind,
         });
     }
-    // End the track at the final slot boundary (rendered with --use-eot).
+    // End the track at the final boundary (rendered with --use-eot).
     track.push(TrackEvent {
-        delta: u28::from_int_lossy(total_ms - prev),
+        delta: u28::from_int_lossy(total_ms.saturating_sub(prev)),
         kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
     });
 
@@ -270,6 +308,40 @@ mod tests {
             vec![(0, 60, 90), (0, 64, 90), (0, 67, 90)],
             "all chord tones start together at the slot boundary with the slot velocity"
         );
+    }
+
+    #[test]
+    fn phrase_places_hits_and_ends_at_total() {
+        // Arpeggio (60 @0, 67 @350, 72 @700) then a held triad @1000, over 5s.
+        let hits = vec![
+            (0u32, 300u32, vec![60u8], 100u8),
+            (350, 300, vec![67], 100),
+            (700, 300, vec![72], 100),
+            (1000, 4000, vec![60, 67, 72], 100),
+        ];
+        let smf = build_phrase_smf(&hits, 5000);
+        let parsed = Smf::parse(&smf).unwrap();
+
+        let mut abs = 0u32;
+        let mut ons: Vec<(u32, u8)> = Vec::new();
+        let mut end = 0u32;
+        for ev in &parsed.tracks[0] {
+            abs += ev.delta.as_int();
+            match ev.kind {
+                TrackEventKind::Midi {
+                    message: MidiMessage::NoteOn { key, vel },
+                    ..
+                } if vel.as_int() > 0 => ons.push((abs, key.as_int())),
+                TrackEventKind::Meta(MetaMessage::EndOfTrack) => end = abs,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            ons,
+            vec![(0, 60), (350, 67), (700, 72), (1000, 60), (1000, 67), (1000, 72)],
+            "arpeggio then the triad struck together at 1000ms"
+        );
+        assert_eq!(end, 5000, "track ends at total_ms");
     }
 
     #[test]

@@ -94,7 +94,8 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     // Per-font analysis: probe the sounding set (for compact --chords and to focus
     // the ring-out measurement), then size the slots.
     let meas_vel = velocities.iter().copied().max().unwrap_or(100);
-    let need_probe = !args.no_probe && (args.chords.is_some() || args.auto_slot_length);
+    let need_probe =
+        !args.no_probe && (args.chords.is_some() || args.auto_slot_length || args.demo);
     if need_probe {
         println!("Probing sounding range ({} ms/note)...", args.probe_ms);
     }
@@ -105,7 +106,15 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let jobs = build_jobs(args, &velocities, &preps);
+    let demo_jobs = if args.demo {
+        build_demo_jobs(args, &preps)
+    } else {
+        Vec::new()
+    };
     println!("Chains      : {}", jobs.len());
+    if args.demo {
+        println!("Demos       : {}", demo_jobs.len());
+    }
 
     let pool = {
         let mut b = rayon::ThreadPoolBuilder::new();
@@ -117,9 +126,10 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
     println!("Parallelism : {} worker(s)\n", pool.current_num_threads());
 
     let done = AtomicUsize::new(0);
-    let total = jobs.len();
+    let total = jobs.len() + demo_jobs.len();
     let results: Vec<Result<JobOutput>> = pool.install(|| {
-        jobs.par_iter()
+        let mut rs: Vec<Result<JobOutput>> = jobs
+            .par_iter()
             .map(|job| {
                 let out = render_job(job, &engine, args);
                 let k = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -129,7 +139,21 @@ pub fn run(args: &RenderSfzArgs) -> Result<()> {
                 }
                 out
             })
-            .collect()
+            .collect();
+        let demos: Vec<Result<JobOutput>> = demo_jobs
+            .par_iter()
+            .map(|job| {
+                let out = render_demo(job, &engine, args);
+                let k = done.fetch_add(1, Ordering::Relaxed) + 1;
+                match &out {
+                    Ok(o) => println!("[{k}/{total}] demo {}", o.summary),
+                    Err(e) => println!("[{k}/{total}] FAILED demo {}: {e:#}", job.label),
+                }
+                out
+            })
+            .collect();
+        rs.extend(demos);
+        rs
     });
 
     let mut written: Vec<PathBuf> = Vec::new();
@@ -305,7 +329,9 @@ fn base_chains(args: &RenderSfzArgs, slot_length: f64, chord_roots: &[u8]) -> Ve
     let mut chains = Vec::new();
     let chords = args.resolved_chords();
 
-    if args.notes || (args.chord.is_none() && chords.is_empty()) {
+    // The note chain: explicit via --notes, or the default when no other output
+    // is requested. `--demo` alone suppresses it (demo-only render).
+    if args.notes || (args.chord.is_none() && chords.is_empty() && !args.demo) {
         chains.push(BaseChain {
             slot_map: build_slot_map(args.start_midi, args.end_midi, slot_length, None),
             tag: "notes".to_string(),
@@ -389,6 +415,96 @@ fn build_jobs(args: &RenderSfzArgs, velocities: &[u8], font_preps: &[FontPrep]) 
         }
     }
     jobs
+}
+
+/// Build one demo job per font, choosing each phrase's root from the font's
+/// probed sounding range.
+fn build_demo_jobs(args: &RenderSfzArgs, font_preps: &[FontPrep]) -> Vec<DemoJob> {
+    let multi_font = args.sfz.len() > 1;
+    args.sfz
+        .iter()
+        .zip(font_preps)
+        .map(|(sfz, prep)| DemoJob {
+            sfz: sfz.clone(),
+            out_base: font_output_base(args, sfz, multi_font),
+            base: demo_base_note(&prep.chord_roots, args.start_midi, args.end_midi),
+            label: font_stem(sfz),
+        })
+        .collect()
+}
+
+/// One short audition phrase to render for a font (one per font, not fanned out
+/// over velocity/variation).
+struct DemoJob {
+    sfz: PathBuf,
+    out_base: PathBuf,
+    /// Root of the phrase, chosen to sit in the font's sounding range.
+    base: u8,
+    label: String,
+}
+
+/// Choose the demo's root: aim for middle C (MIDI 60), clamped into the font's
+/// sounding range so the whole arpeggio (up to root+octave) stays in range. A
+/// bass- or treble-only font lands at the nearest covered register instead.
+fn demo_base_note(roots: &[u8], start: u8, end: u8) -> u8 {
+    let (lo, hi) = if roots.is_empty() {
+        (start, end)
+    } else {
+        // roots come sorted from the probe: lowest..highest sounding note.
+        (roots[0], roots[roots.len() - 1])
+    };
+    let ceiling = hi.saturating_sub(12).max(lo);
+    60u8.clamp(lo, ceiling)
+}
+
+/// The demo phrase: a root/fifth/octave arpeggio, then the triad held to the end.
+/// Returns `(start_ms, dur_ms, notes, velocity)` hits. Notes clamp to <= 127.
+fn demo_hits(base: u8, total_ms: u32, vel: u8) -> Vec<(u32, u32, Vec<u8>, u8)> {
+    let fifth = base.saturating_add(7).min(127);
+    let octave = base.saturating_add(12).min(127);
+    let hold_start = 1000.min(total_ms);
+    vec![
+        (0, 300, vec![base], vel),
+        (350, 300, vec![fifth], vel),
+        (700, 300, vec![octave], vel),
+        (hold_start, total_ms.saturating_sub(hold_start), vec![base, fifth, octave], vel),
+    ]
+}
+
+/// Render one font's audition demo to `demo_<Ns>.wav` in its output folder.
+fn render_demo(job: &DemoJob, engine: &Path, args: &RenderSfzArgs) -> Result<JobOutput> {
+    let total_ms = (args.demo_seconds * 1000.0).round() as u32;
+    let hits = demo_hits(job.base, total_ms, args.velocity);
+    let smf = sfz::build_phrase_smf(&hits, total_ms);
+    let rendered = sfz::render_chain(engine, &job.sfz, &smf, args.sample_rate)
+        .with_context(|| format!("rendering demo for {}", job.sfz.display()))?;
+
+    let out_channels = args.channels.resolve(rendered.channels);
+    // finalize_slot down-mixes/expands, (identity) resamples to 44.1 kHz, and
+    // forces the exact demo length. Onset trimming off — the phrase starts at t=0.
+    let mut buf = audio::finalize_slot(
+        &rendered.samples,
+        rendered.sample_rate,
+        rendered.channels,
+        out_channels,
+        args.demo_seconds,
+        0.0,
+        0,
+    );
+    let fade_frames = (args.fade_ms as f64 * M8_SAMPLE_RATE as f64 / 1000.0) as usize;
+    audio::apply_end_fade(&mut buf, out_channels, fade_frames);
+    if !args.no_normalize {
+        audio::normalize_peak(&mut buf, dbfs_to_amp(args.normalize_dbfs));
+    }
+
+    let folder = output::render_dir(&job.out_base);
+    std::fs::create_dir_all(&folder)
+        .with_context(|| format!("creating output folder {}", folder.display()))?;
+    let path = folder.join(format!("demo_{}s.wav", args.demo_seconds));
+    wav::write_wav(&path, &buf, M8_SAMPLE_RATE, out_channels)?;
+
+    let summary = format!("{} (root {})", job.label, midi_to_m8_note(job.base));
+    Ok(JobOutput { written: vec![path], summary })
 }
 
 /// The base output path for a font: `--output` verbatim for a single font, one
@@ -665,10 +781,28 @@ fn print_plan(args: &RenderSfzArgs, jobs: &[Job]) {
             );
         }
     }
-    println!("\n  Output files ({}):", jobs.len());
+    if args.demo {
+        println!("  Demo        : demo_{}s.wav per font (root/fifth/octave arpeggio + held chord)", args.demo_seconds);
+    }
+    let demo_paths: Vec<PathBuf> = if args.demo {
+        let multi_font = args.sfz.len() > 1;
+        args.sfz
+            .iter()
+            .map(|sfz| {
+                output::render_dir(&font_output_base(args, sfz, multi_font))
+                    .join(format!("demo_{}s.wav", args.demo_seconds))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    println!("\n  Output files ({}):", jobs.len() + demo_paths.len());
     for job in jobs {
         let path =
             output::output_wav_path(&job.out_base, &job.name, job.slot_map.len(), args.note_length, false);
+        println!("    - {}", path.display());
+    }
+    for path in &demo_paths {
         println!("    - {}", path.display());
     }
 }
@@ -739,6 +873,34 @@ mod tests {
         assert!(jobs.iter().any(|j| j.name == "min_v90_take02"));
         // These are all chord jobs (tagged for the JSON sidecar only).
         assert!(jobs.iter().all(|j| j.is_chord));
+    }
+
+    #[test]
+    fn demo_base_note_targets_middle_c_clamped_to_range() {
+        // Range spans middle C -> middle C (60).
+        assert_eq!(demo_base_note(&[48, 60, 72], 0, 127), 60);
+        // Bass-only font: clamp up-bound keeps the octave in range (hi 48 -> 36).
+        assert_eq!(demo_base_note(&[28, 36, 48], 0, 127), 36);
+        // Treble-only font: clamp up to the lowest sounding note.
+        assert_eq!(demo_base_note(&[72, 84, 100], 0, 127), 72);
+        // No probe (empty): use the CLI range midpoint target, still 60.
+        assert_eq!(demo_base_note(&[], 20, 100), 60);
+        // Very narrow range: base pins to the single covered spot.
+        assert_eq!(demo_base_note(&[64, 65], 0, 127), 64);
+    }
+
+    #[test]
+    fn demo_hits_arpeggio_then_held_triad() {
+        let hits = demo_hits(60, 5000, 100);
+        assert_eq!(hits.len(), 4);
+        assert_eq!(hits[0], (0, 300, vec![60], 100));
+        assert_eq!(hits[1], (350, 300, vec![67], 100));
+        assert_eq!(hits[2], (700, 300, vec![72], 100));
+        // Held triad from 1s to the end.
+        assert_eq!(hits[3], (1000, 4000, vec![60, 67, 72], 100));
+        // Fifth/octave clamp at the top of the MIDI range.
+        let high = demo_hits(120, 5000, 100);
+        assert_eq!(high[3].2, vec![120, 127, 127]);
     }
 
     #[test]
@@ -836,6 +998,8 @@ mod tests {
             per_octave: false,
             max_slices: 128,
             notes: false,
+            demo: false,
+            demo_seconds: 5.0,
             auto_slot_length: false,
             max_slot_length: 20.0,
             measure_notes: 8,

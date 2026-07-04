@@ -433,6 +433,17 @@ pub struct RenderSfzArgs {
     #[arg(long)]
     pub notes: bool,
 
+    /// Also write a short audition phrase (`demo_5s.wav`) per font: a neutral
+    /// root/fifth/octave arpeggio then a held chord, transposed into the font's
+    /// sounding range, so you can hear it without loading a chain into the M8.
+    /// Passed alone, it writes only the demo (no note chain).
+    #[arg(long)]
+    pub demo: bool,
+
+    /// Length of the `--demo` audition phrase, in seconds.
+    #[arg(long, default_value_t = 5.0)]
+    pub demo_seconds: f64,
+
     /// Measure each font's ring-out and use it as the slot length (overrides
     /// --slot-length). Pair with a short --note-length for snug slots.
     #[arg(long)]
@@ -619,6 +630,9 @@ impl RenderSfzArgs {
         }
         if self.probe_threshold < 0.0 || self.probe_threshold.is_nan() {
             bail!("probe-threshold must be >= 0 (got {})", self.probe_threshold);
+        }
+        if self.demo && (self.demo_seconds <= 0.0 || self.demo_seconds.is_nan()) {
+            bail!("demo-seconds must be greater than 0 (got {})", self.demo_seconds);
         }
         Ok(())
     }

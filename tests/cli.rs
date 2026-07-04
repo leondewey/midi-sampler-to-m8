@@ -215,6 +215,29 @@ fn render_sfz_per_octave_requires_chords() {
 }
 
 #[test]
+fn render_sfz_demo_only_lists_just_the_demo() {
+    // `--demo` alone suppresses the auto note-chain -> a single demo file.
+    bin()
+        .args(["render-sfz", "--sfz", "Piano.sfz", "--demo", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Output files (1)"))
+        .stdout(predicate::str::contains("Piano/demo_5s.wav"))
+        .stdout(predicate::str::contains("notes_").not());
+}
+
+#[test]
+fn render_sfz_notes_plus_demo_lists_both() {
+    bin()
+        .args(["render-sfz", "--sfz", "Piano.sfz", "--notes", "--demo", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Output files (2)"))
+        .stdout(predicate::str::contains("notes_4s_128slots.wav"))
+        .stdout(predicate::str::contains("demo_5s.wav"));
+}
+
+#[test]
 fn render_sfz_chord_and_chords_are_mutually_exclusive() {
     bin()
         .args([

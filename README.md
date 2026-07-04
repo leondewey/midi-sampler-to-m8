@@ -129,6 +129,12 @@ These live-path flags work here too:
   `oct-C4_maj-min_0.25s_24slots.wav`. Mutually exclusive with `--file-per-chord`.
 - **`--notes`** — also emit the plain note chain alongside chord files (it's already the
   default when no chord flags are given).
+- **`--demo`** — also write a short audition phrase, `demo_5s.wav`, per font: a neutral
+  root/fifth/octave arpeggio then a held chord, aimed at middle C but transposed into the
+  font's sounding range (from the probe) so it always sounds. Double-click it to hear the
+  instrument without loading a chain into the M8. Passed **alone** it writes only the demo
+  (no note chain) — handy for adding previews to already-rendered folders. Length is
+  `--demo-seconds` (default 5).
 
 **Default range and padding.** `render-sfz` defaults to the full **0..127 (128 slots,
 `SLICE=80`)** so each slot index equals its MIDI note and samples map 1:1 to M8 keys — keys
@@ -174,6 +180,7 @@ slots removed (interior silent slots kept), e.g. `dir/Yamaha/notes_8s_21slots_un
 the slot count in its name reflects the trimmed length. Off by default.
 
 Chord files use the chord tag as the name (`maj-min_8s_122slots.wav`, `oct-C3_maj-min_8s_48slots.wav`).
+With `render-sfz --demo`, a short audition phrase lands in the same folder as `demo_5s.wav`.
 
 Channels follow the source by default (`--channels auto`): a stereo input yields a stereo WAV, a mono input a mono WAV. Use `--channels mono` or `--channels stereo` to force a layout. The layout is recorded in the WAV header (and the JSON sidecar), not the filename.
 

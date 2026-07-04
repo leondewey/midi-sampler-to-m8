@@ -32,9 +32,13 @@
 #              parallelism, so >1 mainly overlaps engine spin-up/IO and its
 #              live output is captured per-font instead of streamed.
 #
+# Each rendered font also gets a ~5s audition phrase (demo_5s.wav) by default,
+# so you can hear it without loading a chain into the M8; pass --no-demo to skip.
+# A re-run backfills the demo onto already-rendered fonts without redoing chains.
+#
 # Usage:
 #   scripts/batch-render-sfz.sh scan
-#   scripts/batch-render-sfz.sh run [--csv]
+#   scripts/batch-render-sfz.sh run [--csv] [--no-demo]
 
 set -uo pipefail
 
@@ -167,18 +171,29 @@ render_row() {
   shopt -s nullglob
 
   local out_dir="$OUT_ROOT/$output_rel"
-  local existing=("$out_dir"/notes_"${NOTE_LENGTH}"s_*slots.wav)
-  if (( ${#existing[@]} )); then
-    printf '%s\tskip\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
-    printf 'skip\t%s\n' "$output_rel" >>"$results"
-    echo "$tag skip  $output_rel"; return
-  fi
+  local want_demo="${demo:-1}"
+  local notes_glob=("$out_dir"/notes_"${NOTE_LENGTH}"s_*slots.wav)
+  local demo_glob=("$out_dir"/demo_*s.wav)
 
-  local -a args=(render-sfz --auto-slot-length --notes --note-length "$NOTE_LENGTH")
-  [ -n "$MAX_SLOT" ] && args+=(--max-slot-length "$MAX_SLOT")
-  [ "$chords" = y ] && args+=(--chords maj,min,dim --file-per-chord)
-  [ "${csv:-0}" = 1 ] && args+=(--csv)
-  args+=(--sfz "$sfz_path" --output "$OUT_ROOT/$output_rel.wav")
+  local -a args
+  if (( ${#notes_glob[@]} )); then
+    # Chains already rendered. Skip unless a demo is wanted and still missing —
+    # in which case backfill just the demo (cheap; leaves the chains untouched).
+    if [ "$want_demo" = 1 ] && (( ${#demo_glob[@]} == 0 )); then
+      args=(render-sfz --demo --sfz "$sfz_path" --output "$OUT_ROOT/$output_rel.wav")
+    else
+      printf '%s\tskip\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
+      printf 'skip\t%s\n' "$output_rel" >>"$results"
+      echo "$tag skip  $output_rel"; return
+    fi
+  else
+    args=(render-sfz --auto-slot-length --notes --note-length "$NOTE_LENGTH")
+    [ -n "$MAX_SLOT" ] && args+=(--max-slot-length "$MAX_SLOT")
+    [ "$chords" = y ] && args+=(--chords maj,min,dim --file-per-chord)
+    [ "$want_demo" = 1 ] && args+=(--demo)
+    [ "${csv:-0}" = 1 ] && args+=(--csv)
+    args+=(--sfz "$sfz_path" --output "$OUT_ROOT/$output_rel.wav")
+  fi
 
   echo "$tag ==> $output_rel"
   local tmplog rc
@@ -206,10 +221,11 @@ render_row() {
 
 # Render every process=y row of the manifest.
 run() {
-  local csv=0
+  local csv=0 demo=1
   for a in "$@"; do
     case "$a" in
       --csv) csv=1 ;;
+      --no-demo) demo=0 ;;
       *) die "unknown run option: $a" ;;
     esac
   done
@@ -278,5 +294,5 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   scan) scan "$@" ;;
   run)  run "$@" ;;
-  *) echo "usage: $0 {scan|run [--csv]}" >&2; exit 2 ;;
+  *) echo "usage: $0 {scan|run [--csv] [--no-demo]}" >&2; exit 2 ;;
 esac
