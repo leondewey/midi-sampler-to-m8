@@ -124,6 +124,9 @@ These live-path flags work here too:
   legend that says which slice is which chord); their roots are compacted to the notes that
   actually sound, found by a quick **probe** (see below). `--file-per-chord` writes one
   quality per file.
+- **`--per-octave`** — with `--chords`, write one file per octave (that octave's roots ×
+  the selected qualities) so a playable region stays in one file, e.g.
+  `oct-C4_maj-min_0.25s_24slots.wav`. Mutually exclusive with `--file-per-chord`.
 - **`--notes`** — also emit the plain note chain alongside chord files (it's already the
   default when no chord flags are given).
 
@@ -156,8 +159,8 @@ work just like the live path. Preview the exact set of files a run would produce
 `--dry-run` (it never invokes the engine; chord slot counts there are the full-range upper
 bound before the probe narrows them).
 
-> Not yet ported from the live path: `--per-octave` chord layout. SF2 support and an
-> in-process `libsfizz` backend (dropping the per-chain subprocess) are possible follow-ups.
+> Possible follow-ups: SF2 support and an in-process `libsfizz` backend (dropping the
+> per-chain subprocess).
 
 ## Output files
 

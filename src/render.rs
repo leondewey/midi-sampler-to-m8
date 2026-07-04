@@ -767,7 +767,7 @@ fn packed_roots(args: &RenderArgs, probed: &Option<Vec<bool>>) -> Vec<u8> {
 
 /// Group roots by octave (`midi / 12`), preserving order, into
 /// `(octave_index, roots_in_octave)` pairs.
-fn octave_groups(roots: &[u8]) -> Vec<(u8, Vec<u8>)> {
+pub(crate) fn octave_groups(roots: &[u8]) -> Vec<(u8, Vec<u8>)> {
     let mut groups: Vec<(u8, Vec<u8>)> = Vec::new();
     for &r in roots {
         let oct = r / 12;

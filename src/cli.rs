@@ -419,6 +419,11 @@ pub struct RenderSfzArgs {
     #[arg(long)]
     pub file_per_chord: bool,
 
+    /// With --chords, write one file per octave (that octave's roots x the
+    /// selected qualities) so a playable region stays in one file.
+    #[arg(long)]
+    pub per_octave: bool,
+
     /// Slice budget per file for chord packing (the M8 fixed-slice count).
     #[arg(long, default_value_t = 128)]
     pub max_slices: usize,
@@ -591,6 +596,12 @@ impl RenderSfzArgs {
         }
         if self.file_per_chord && self.chords.is_none() {
             bail!("--file-per-chord only applies with --chords");
+        }
+        if self.per_octave && self.chords.is_none() {
+            bail!("--per-octave only applies with --chords");
+        }
+        if self.per_octave && self.file_per_chord {
+            bail!("use either --per-octave or --file-per-chord, not both");
         }
         if self.chords.is_some() {
             if self.max_slices < 1 {

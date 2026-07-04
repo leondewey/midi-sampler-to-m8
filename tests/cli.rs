@@ -179,6 +179,42 @@ fn render_sfz_notes_plus_chords_lists_all_files() {
 }
 
 #[test]
+fn render_sfz_per_octave_lists_one_file_per_octave() {
+    bin()
+        .args([
+            "render-sfz",
+            "--sfz",
+            "Piano.sfz",
+            "--chords",
+            "maj,min",
+            "--per-octave",
+            "--note-length",
+            "0.25",
+            "--start-midi",
+            "48",
+            "--end-midi",
+            "83",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        // 48..83 spans three octaves (C3/C4/C5); each becomes one file of that
+        // octave's 12 roots x 2 qualities = 24 slots.
+        .stdout(predicate::str::contains("Output files (3)"))
+        .stdout(predicate::str::contains("oct-C3_maj-min_0.25s_24slots.wav"))
+        .stdout(predicate::str::contains("oct-C5_maj-min_0.25s_24slots.wav"));
+}
+
+#[test]
+fn render_sfz_per_octave_requires_chords() {
+    bin()
+        .args(["render-sfz", "--sfz", "Piano.sfz", "--per-octave", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--per-octave"));
+}
+
+#[test]
 fn render_sfz_chord_and_chords_are_mutually_exclusive() {
     bin()
         .args([

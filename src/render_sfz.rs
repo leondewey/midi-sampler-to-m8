@@ -14,7 +14,7 @@ use crate::cli::RenderSfzArgs;
 use crate::config::{AudioConfig, FormatConfig, M8Config, MidiConfig, RenderConfig, RenderParams};
 use crate::notes::{Slot, build_slot_map, chord_slots, midi_to_m8_note};
 use crate::output;
-use crate::render::{fit_roots, last_sound_seconds, pick_spread, split_chord_files};
+use crate::render::{fit_roots, last_sound_seconds, octave_groups, pick_spread, split_chord_files};
 use crate::sfz;
 use crate::wav::{self, M8_SAMPLE_RATE};
 use anyhow::{Context, Result};
@@ -320,15 +320,31 @@ fn base_chains(args: &RenderSfzArgs, slot_length: f64, chord_roots: &[u8]) -> Ve
         });
     }
     if !chords.is_empty() {
-        for chunk in
-            split_chord_files(chord_roots.len(), &chords, args.max_slices, args.file_per_chord)
-        {
-            let tag = chunk.iter().map(|q| q.short()).collect::<Vec<_>>().join("-");
-            chains.push(BaseChain {
-                slot_map: chord_slots(chord_roots, &chunk, slot_length),
-                tag,
-                is_chord: true,
-            });
+        if args.per_octave {
+            // One file per octave: that octave's roots x the qualities (further
+            // split only if a single octave overflows the slice budget).
+            for (octave, oct_roots) in octave_groups(chord_roots) {
+                let prefix = format!("oct-{}", midi_to_m8_note(octave * 12));
+                for chunk in split_chord_files(oct_roots.len(), &chords, args.max_slices, false) {
+                    let qs = chunk.iter().map(|q| q.short()).collect::<Vec<_>>().join("-");
+                    chains.push(BaseChain {
+                        slot_map: chord_slots(&oct_roots, &chunk, slot_length),
+                        tag: format!("{prefix}_{qs}"),
+                        is_chord: true,
+                    });
+                }
+            }
+        } else {
+            for chunk in
+                split_chord_files(chord_roots.len(), &chords, args.max_slices, args.file_per_chord)
+            {
+                let tag = chunk.iter().map(|q| q.short()).collect::<Vec<_>>().join("-");
+                chains.push(BaseChain {
+                    slot_map: chord_slots(chord_roots, &chunk, slot_length),
+                    tag,
+                    is_chord: true,
+                });
+            }
         }
     }
     chains
@@ -817,6 +833,7 @@ mod tests {
             chord: None,
             chords: None,
             file_per_chord: false,
+            per_octave: false,
             max_slices: 128,
             notes: false,
             auto_slot_length: false,
