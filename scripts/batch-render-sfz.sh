@@ -27,6 +27,10 @@
 #   MAX_SLOT   cap for --auto-slot-length, seconds; keeps long-decay
 #              instruments (grand pianos, pads) from producing huge files
 #              (empty = the tool default of 20s)   (default 6)
+#   JOBS       fonts to render concurrently          (default 1)
+#              Each font already saturates the CPU via the tool's internal
+#              parallelism, so >1 mainly overlaps engine spin-up/IO and its
+#              live output is captured per-font instead of streamed.
 #
 # Usage:
 #   scripts/batch-render-sfz.sh scan
@@ -153,6 +157,53 @@ scan() {
   echo "  $0 run"
 }
 
+# Render one manifest row. Reads csv/NOTE_LENGTH/MAX_SLOT/BIN/OUT_ROOT from the
+# caller's scope (inherited by background jobs). With STREAM=1 the engine output
+# is shown live (sequential mode); otherwise it's captured to a temp log and only
+# a status line is printed (parallel mode). Failures are copied to _failures/.
+render_row() {
+  local idx="$1" total="$2" chords="$3" output_rel="$4" sfz_path="$5" log="$6" results="$7"
+  local tag="[$idx/$total]"
+  shopt -s nullglob
+
+  local out_dir="$OUT_ROOT/$output_rel"
+  local existing=("$out_dir"/notes_"${NOTE_LENGTH}"s_*slots.wav)
+  if (( ${#existing[@]} )); then
+    printf '%s\tskip\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
+    printf 'skip\t%s\n' "$output_rel" >>"$results"
+    echo "$tag skip  $output_rel"; return
+  fi
+
+  local -a args=(render-sfz --auto-slot-length --notes --note-length "$NOTE_LENGTH")
+  [ -n "$MAX_SLOT" ] && args+=(--max-slot-length "$MAX_SLOT")
+  [ "$chords" = y ] && args+=(--chords maj,min,dim --file-per-chord)
+  [ "${csv:-0}" = 1 ] && args+=(--csv)
+  args+=(--sfz "$sfz_path" --output "$OUT_ROOT/$output_rel.wav")
+
+  echo "$tag ==> $output_rel"
+  local tmplog rc
+  tmplog="$(mktemp)"
+  if [ "${STREAM:-0}" = 1 ]; then
+    "$BIN" "${args[@]}" 2>&1 | tee "$tmplog"; rc=${PIPESTATUS[0]}
+  else
+    "$BIN" "${args[@]}" >"$tmplog" 2>&1; rc=$?
+  fi
+
+  if (( rc == 0 )); then
+    printf '%s\tdone\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
+    printf 'done\t%s\n' "$output_rel" >>"$results"
+    echo "$tag done  $output_rel"
+  else
+    local safe="${output_rel//\//_}"
+    cp "$tmplog" "$OUT_ROOT/_failures/$safe.log" 2>/dev/null || true
+    printf '%s\tfail\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
+    printf 'fail\t%s\n' "$output_rel" >>"$results"
+    echo "$tag FAIL  $output_rel  (see _failures/$safe.log)"
+    [ "${STREAM:-0}" = 1 ] || tail -n 8 "$tmplog" | sed 's/^/    /'
+  fi
+  rm -f "$tmplog"
+}
+
 # Render every process=y row of the manifest.
 run() {
   local csv=0
@@ -177,48 +228,48 @@ run() {
     echo "$dups" >&2
     die "fix the manifest (give each a unique output_rel, or set extras to process=n)"
   fi
-  mkdir -p "$OUT_ROOT"
+  mkdir -p "$OUT_ROOT" "$OUT_ROOT/_failures"
   cp "$MANIFEST" "$OUT_ROOT/_manifest.tsv" 2>/dev/null || true
   local log="$OUT_ROOT/_batch_log.tsv"
+  local jobs="${JOBS:-1}"
 
-  shopt -s nullglob
-  local done=0 skip=0 fail=0
-  local -a fails=()
+  # Total process=y rows drive the [i/total] progress prefix.
+  local total
+  total=$(awk -F'\t' '!/^#/ && $1=="y" && $4!=""' "$MANIFEST" | wc -l | tr -d ' ')
 
+  # Per-run results (status<TAB>output_rel), tallied at the end. Written by each
+  # render_row (including background jobs) so counts survive parallel subshells.
+  local results
+  results="$(mktemp)"
+
+  local idx=0 running=0
   while IFS=$'\t' read -r process chords output_rel sfz_path; do
     case "$process" in \#*|"") continue ;; esac   # comments / blank
     [ "$process" = y ] || continue
     [ -n "$sfz_path" ] || continue
-
-    local out_dir="$OUT_ROOT/$output_rel"
-    local existing=("$out_dir"/notes_"${NOTE_LENGTH}"s_*slots.wav)
-    if (( ${#existing[@]} )); then
-      printf '%s\tskip\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
-      echo "skip  $output_rel"; skip=$((skip + 1)); continue
-    fi
-
-    local -a args=(render-sfz --auto-slot-length --notes --note-length "$NOTE_LENGTH")
-    [ -n "$MAX_SLOT" ] && args+=(--max-slot-length "$MAX_SLOT")
-    [ "$chords" = y ] && args+=(--chords maj,min,dim --file-per-chord)
-    [ "$csv" = 1 ] && args+=(--csv)
-    args+=(--sfz "$sfz_path" --output "$OUT_ROOT/$output_rel.wav")
-
-    echo "==> $output_rel"
-    if "$BIN" "${args[@]}"; then
-      printf '%s\tdone\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
-      echo "done  $output_rel"; done=$((done + 1))
+    idx=$((idx + 1))
+    if (( jobs > 1 )); then
+      render_row "$idx" "$total" "$chords" "$output_rel" "$sfz_path" "$log" "$results" &
+      running=$((running + 1))
+      if (( running >= jobs )); then wait; running=0; fi
     else
-      printf '%s\tfail\t%s\n' "$(date +%FT%T)" "$output_rel" >>"$log"
-      echo "FAIL  $output_rel"; fail=$((fail + 1)); fails+=("$output_rel")
+      STREAM=1 render_row "$idx" "$total" "$chords" "$output_rel" "$sfz_path" "$log" "$results"
     fi
   done < "$MANIFEST"
+  (( jobs > 1 )) && wait
+
+  local done skip fail
+  done=$(awk -F'\t' '$1=="done"' "$results" | wc -l | tr -d ' ')
+  skip=$(awk -F'\t' '$1=="skip"' "$results" | wc -l | tr -d ' ')
+  fail=$(awk -F'\t' '$1=="fail"' "$results" | wc -l | tr -d ' ')
 
   echo
   echo "Summary: $done rendered, $skip skipped, $fail failed.  Log: $log"
   if (( fail )); then
-    echo "Failures:"
-    printf '  %s\n' "${fails[@]}"
+    echo "Failures (logs in $OUT_ROOT/_failures/):"
+    awk -F'\t' '$1=="fail"{print "  "$2}' "$results"
   fi
+  rm -f "$results"
 }
 
 # --- entrypoint ------------------------------------------------------------
